@@ -1,0 +1,52 @@
+[package]
+name = "flipbrush-app"
+description = "Aplikasi Flipbrush: shell eframe/egui, tema, dan entry platform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+# cdylib dibutuhkan Android (cargo-apk), lib/rustic untuk bin desktop.
+crate-type = ["cdylib", "lib"]
+
+[[bin]]
+name = "flipbrush"
+path = "src/main.rs"
+
+[dependencies]
+eframe.workspace = true
+egui.workspace = true
+flipbrush-core.workspace = true
+flipbrush-platform.workspace = true
+log.workspace = true
+
+# a11y (DESIGN.md §9): eframe 0.36 hanya mengizinkan `accesskit` di luar
+# Android (native-activity). Non-Android: dukungan screen reader desktop.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+eframe = { workspace = true, features = ["accesskit"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.15"
+winit = "0.30"
+
+# ------------------------------------------------------------------
+# Manifest Android (dibaca cargo-apk; lihat DESIGN.md §1: package
+# `app.flipbrush`, ekstensi proyek `.flip`).
+# ------------------------------------------------------------------
+[package.metadata.android]
+package = "app.flipbrush"
+apk_name = "flipbrush"
+build_targets = ["aarch64-linux-android", "x86_64-linux-android"]
+
+[package.metadata.android.sdk]
+# Baseline perangkat (DESIGN.md §13.3): Android 9+, Vulkan 1.1.
+min_sdk_version = 26
+target_sdk_version = 35
+
+[package.metadata.android.application]
+label = "Flipbrush"
+
+[lints]
+workspace = true

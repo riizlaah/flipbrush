@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = ["flipbrush-app", "flipbrush-core", "flipbrush-platform"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.99"
+
+[workspace.dependencies]
+# UI shell — egui/eframe dengan renderer wgpu (keputusan: wgpu, lihat §13.3 baseline Vulkan)
+eframe = { version = "0.36.2", default-features = false, features = [
+    "android-native-activity",
+    "default_fonts",
+    "links",
+    "wayland",
+    "wgpu",
+    "x11",
+] }
+egui = "0.36.2"
+
+# Logging
+log = "0.4"
+
+# Workspace crates
+flipbrush-core = { path = "flipbrush-core" }
+flipbrush-platform = { path = "flipbrush-platform" }
+
+[workspace.lints.clippy]
+# Semua lint default; CI menjalankan clippy dengan -D warnings.
+
+[profile.dev]
+# Optimalisasi untuk dependensi UI/GPU agar stroke tetap instan (§6) saat dev.
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
