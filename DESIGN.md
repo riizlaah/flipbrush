@@ -400,7 +400,7 @@ disuspend). Ukuran kontrol: mobile **44 px** minimum (touch target), desktop **2
 
 ## 11. Checklis rilis design system
 
-- [ ] Semua token terdefinisi & tidak ada hard-coded color di UI.
+- [x] Semua token terdefinisi & tidak ada hard-coded color di UI.
 - [ ] Kontras teks lolos audit (axe/manual).
 - [ ] Semua tombol ikon punya accessible name; desktop juga tooltip + shortcut.
 - [ ] Motion dimatikan pada `prefers-reduced-motion`.

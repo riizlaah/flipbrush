@@ -50,3 +50,6 @@ label = "Flipbrush"
 
 [lints]
 workspace = true
+
+[build-dependencies]
+usvg = "0.48"

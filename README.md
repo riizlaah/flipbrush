@@ -10,7 +10,7 @@ M0–M7): **[DESIGN.md](DESIGN.md)**.
 | Fase | Isi | Status |
 |---|---|---|
 | M0 | Fondasi proyek: workspace Cargo, CI, toolchain docs | ✅ |
-| M1 | Shell, tema (§2–§4), ikon (§5) | ⬜ |
+| M1 | Shell, tema (§2–§4), ikon (§5) | ✅ |
 | M2 | Kanvas & stroke core | ⬜ |
 | M3 | Model animasi, timeline, `.flip` | ⬜ |
 | M4 | UI desktop lengkap (tool rail, docks, command palette, color) | ⬜ |
@@ -23,7 +23,10 @@ Rincian tiap fase: DESIGN.md §12.
 ## Struktur
 
 ```
-flipbrush-app/       shell eframe/egui + theme.rs (satu-satunya hex literal)
+flipbrush-app/       shell eframe/egui; theme.rs = satu-satunya hex literal;
+                     typography.rs (gaya §3); icon.rs + build.rs (pipeline §5)
+assets/              font variabel Inter + JetBrains Mono (lisensi OFL) dan
+                     25 SVG ikon outline (§5)
 flipbrush-core/      model domain (proyek, frame, layer) — tanpa UI/I/O
 flipbrush-platform/  jembatan platform (desktop Linux, Android JNI)
 scripts/             check mutu (hex literal §10)
