@@ -1,8 +1,8 @@
 # Toolchain Flipbrush
 
 Acuan setup environment untuk membangun Flipbrush (DESIGN.md §12.2 M0).
-Host: **Fedora Linux**; platform utama **Android** (build via `cargo-apk`),
-target sekunder desktop Linux.
+Host & target utama: **Linux desktop (Fedora)**; target sekunder **Android**
+(build via `cargo-apk`, M6).
 
 ## 1. Rust
 
@@ -34,7 +34,7 @@ sudo dnf install scrcpy   # mirror layar; adb ikut terpasang
 
 Cek: `vulkaninfo --summary` (perlu `vulkan-tools`).
 
-## 3. Android SDK & NDK
+## 3. Android SDK & NDK *(opsional — hanya untuk M6)*
 
 Butuh minimal:
 
@@ -55,7 +55,7 @@ export PATH="$PATH:$ANDROID_HOME/platform-tools:$ANDROID_HOME/build-tools/35.0.1
 
 Tambahkan export di atas ke `~/.bashrc` agar tidak hilang antar sesi.
 
-## 4. cargo-apk
+## 4. cargo-apk *(opsional — hanya untuk M6)*
 
 ```bash
 cargo install cargo-apk --locked
@@ -77,7 +77,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ./scripts/check-hex-literals.sh        # §10: hex hanya di theme.rs
 
-# Android (device terhubung via adb)
+# Android (opsional/M6; device terhubung via adb)
 # --lib: hanya target cdylib (bin desktop tidak relevan di Android;
 # cargo-apk panik "Bin is not compatible with Cdylib" tanpa flag ini)
 cargo apk build -p flipbrush-app --lib   # APK di target/debug/apk/

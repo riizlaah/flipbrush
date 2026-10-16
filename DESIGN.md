@@ -3,7 +3,7 @@
 Dokumen acuan tunggal untuk seluruh aspek visual dan interaksi **Flipbrush**
 — aplikasi animasi 2D frame-by-frame, tagline _"Flip. Draw. Loop."_
 
-Berlaku untuk build **Android (prioritas utama)**, serta desktop Linux
+Berlaku untuk build **Linux desktop (prioritas utama)**, serta Android
 (target sekunder, M6) dan iOS (menyusul). Package Android: `app.flipbrush`,
 ekstensi proyek: `.flip`.
 
@@ -14,17 +14,18 @@ ekstensi proyek: `.flip`.
 1. **Canvas-first** — Kanvas adalah raja. UI hanya "chrome" setipis mungkin, dan bisa
    disembunyikan sepenuhnya (mode fokus menggambar: desktop `Tab`; mobile chrome
    menyusut menjadi tombol playhead mengambang).
-2. **Mobile-first** — Android adalah platform utama. Setiap keputusan UI divalidasi
-   dulu pada layar sentuh; shell desktop (M6) memakai komponen yang sama dengan
-   layout berbeda.
+2. **Desktop-first** — Linux adalah platform utama. Setiap keputusan UI divalidasi
+   dulu di desktop; shell Android (M6) memakai komponen yang sama dengan layout
+   berbeda.
 3. **Netral agar mata tidak tertipu** — Tidak ada warna chromatic di belakang atau di
    sekeliling kanvas. Semua permukaan menggunakan skala abu-abu netral agar pemilihan
    warna oleh pengguna tidak terpengaruh lingkungan UI.
 4. **Presisi** — Kontrol harus mendukung input presisi: drag-numeric pada slider,
    angka tabular, koordinat yang jelas; di mobile ditambah edge-scrub (mengubah
    ukuran/hardness brush langsung di tepi layar tanpa membuka panel).
-5. **Input-aware** — Mobile: touch target ≥ 44 px, tanpa ketergantungan hover,
-   gesture-driven. Desktop (sekunder): hover states, shortcut keyboard penuh, dense.
+5. **Input-aware** — Desktop (utama): hover states, shortcut keyboard penuh, dense.
+   Mobile (sekunder, M6): touch target ≥ 44 px, tanpa ketergantungan hover,
+   gesture-driven.
 6. **Aksen tunggal** — Hanya satu warna aksen (`accent/brand`) untuk chrome. Aksen tidak
    pernah mewarnai area kanvas atau permukaan besar.
 
@@ -100,8 +101,9 @@ Pengguna dapat memilih aksen chrome — **hanya mengubah chrome, tidak kanvas**:
 
 Aksen & warna animasi tidak berubah antar tema.
 
-Di Android, tema gelap/terang **mengikuti sistem** secara default (setting
-"Ikut sistem"); desktop selalu default gelap.
+Di Linux, tema default gelap (setting di `~/.config/flipbrush/settings.toml`, §10);
+di Android tema gelap/terang **mengikuti sistem** secara default (setting
+"Ikut sistem", M6).
 
 ---
 
@@ -225,13 +227,13 @@ disuspend). Ukuran kontrol: mobile **44 px** minimum (touch target), desktop **2
 - Swatch bar: 16 slot, klik = pilih, drag = reorder, `Shift+Klik` = hapus.
 - Palet harmony (complementary, analogous, triadic) sebagai panel terpisah.
 
-### 7.4 Tool rail (desktop sekunder — M6)
+### 7.4 Tool rail (desktop — M4)
 
 - Lebar 48 px, kiri, `bg/surface-1`, item 40×40 px.
 - Item aktif: `ghost-active` + strip aksen 2 px di tepi kiri rail.
 - Grup dipisah divider `border/default`; tool dengan submenu panah kecil.
 
-### 7.5 Options bar (desktop sekunder — M6)
+### 7.5 Options bar (desktop — M4)
 
 - Tinggi 40 px, di atas kanvas, berisi kontrol spesifik tool aktif
   (mis. brush: size, opacity, hardness, spacing, preset picker).
@@ -245,9 +247,10 @@ disuspend). Ukuran kontrol: mobile **44 px** minimum (touch target), desktop **2
 
 ### 7.7 Timeline / X-sheet
 
-- **Mobile (utama)**: tampilan harian berupa **strip frame horizontal** (lihat §8.1);
+- **Desktop (utama)**: grid X-sheet — baris = layer, kolom = frame. Header kolom:
+  `numeric`.
+- **Mobile (M6)**: tampilan harian berupa **strip frame horizontal** (lihat §8.1);
   grid X-sheet penuh dibuka dari bottom-sheet timeline.
-- Grid desktop: baris = layer, kolom = frame. Header kolom: `numeric`.
 - Cell exposed: `timeline/cel-exposed`; awal exposure punya strip kiri 2 px lebih terang;
   cell lanjutan exposure hanya strip tanpa isi.
 - Playhead: garis 1 px `text/primary` + kepala segitiga.
@@ -268,7 +271,7 @@ disuspend). Ukuran kontrol: mobile **44 px** minimum (touch target), desktop **2
   pernah muncul untuk elemen yang sama).
 - Selalu menyertakan shortcut bila ada.
 
-### 7.10 Command palette (`Ctrl+K`, desktop sekunder — M6)
+### 7.10 Command palette (`Ctrl+K`, desktop — M4)
 
 - Modal terpusat, lebar 560 px, input `body-lg`, hasil `label-md` + shortcut kanan.
 - Sumber: semua command + recent tools + file recent.
@@ -278,7 +281,7 @@ disuspend). Ukuran kontrol: mobile **44 px** minimum (touch target), desktop **2
 - Ikon outline 32 px `text/disabled`, teks `body-lg` `text/secondary`,
   satu aksi `solid` bila relevan. Contoh: "Drag gambar ke sini untuk referensi".
 
-### 7.12 Bottom toolbar (mobile — primary)
+### 7.12 Bottom toolbar (mobile — M6)
 
 - Tinggi 64 px + safe-area inset, `bg/surface-1`, border atas `border/default`.
 - Ikon 24 px, touch target ≥ 48 px; tool aktif: `ghost-active`.
@@ -286,7 +289,7 @@ disuspend). Ukuran kontrol: mobile **44 px** minimum (touch target), desktop **2
 - Saat menggambar chrome menyusut (lihat §8.1); saat gesture multi-jari aktif seluruh
   chrome redup ke 40% opasitas (`gesture-modifier`).
 
-### 7.13 Bottom-sheet (mobile — primary)
+### 7.13 Bottom-sheet (mobile — M6)
 
 - Radius atas `radius/md`, drag-handle 36×4 px `border/strong` di tengah atas.
 - Tiga state snap: **peek 25% / half 50% / full 90%** — drag untuk pindah state,
@@ -299,7 +302,7 @@ disuspend). Ukuran kontrol: mobile **44 px** minimum (touch target), desktop **2
 
 ## 8. Layout
 
-### 8.1 Mobile (Android — prioritas utama)
+### 8.1 Mobile (Android — target sekunder, M6)
 
 ```
 ┌─────────────────────────────────┐
@@ -343,7 +346,7 @@ disuspend). Ukuran kontrol: mobile **44 px** minimum (touch target), desktop **2
   ketuk tombol tersebut untuk mengembalikan chrome.
 - Font-scale sistem dihormati hingga 130% — layout tidak terpotong.
 
-### 8.2 Desktop (target sekunder — M6, Linux)
+### 8.2 Desktop (Linux — prioritas utama, M1–M5)
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -365,8 +368,9 @@ disuspend). Ukuran kontrol: mobile **44 px** minimum (touch target), desktop **2
   mini playhead).
 - Ukuran dock bisa di-resize; state layout persist per proyek.
 - HiDPI: semua ukuran dalam logical px, skala mengikuti faktor DPI sistem.
-- Komponen desktop (tool rail §7.4, options bar §7.5, command palette §7.10) aktif
-  di sini; token & komponen mobile tetap dipakai ulang oleh shell desktop.
+- Komponen desktop (tool rail §7.4, options bar §7.5, command palette §7.10) dibangun
+  lebih dulu di sini; shell Android (M6) memakai ulang token & komponen yang sama
+  dengan layout berbeda (§8.1).
 
 ---
 
@@ -414,21 +418,22 @@ Pemetaan item ke fase verifikasi ada di §12.3.
 
 ## 12. Fase Pengembangan
 
-Setiap fase diakhiri dengan build yang bisa dijalankan (APK di device nyata / binary
-Fedora) dan checklist §11 diverifikasi pada fase yang ditentukan. CI menjalankan
-`clippy`, `rustfmt`, test, dan test dilarangnya hex literal di luar `theme.rs`.
+Setiap fase diakhiri dengan build yang bisa dijalankan (binary Fedora; APK di
+device nyata mulai M6) dan checklist §11 diverifikasi pada fase yang ditentukan.
+CI menjalankan `clippy`, `rustfmt`, test, dan test dilarangnya hex literal di luar
+`theme.rs`.
 
 ### 12.1 Ringkasan
 
 | Fase | Nama | Rujukan § | Keluaran |
 |---|---|---|---|
-| **M0** | Fondasi proyek | — | CI hijau, APK hello-world ter-install |
-| **M1** | Shell, tema, ikon | §2–§6, §8.1 | Design system terpasang, 25 ikon, jalan di Android + Fedora |
-| **M2** | Kanvas & stroke core | §1, §7.2, §8.1 (gesture) | Menggambar instan, gesture dasar, edge-scrub |
-| **M3** | Model animasi | §7.7, §8.1 (strip), §2.3 | Frame/timeline/playback/onion, `.flip` + autosave |
-| **M4** | UI mobile lengkap | §7, §6 (haptics) | Sheet, toolbar, color, panel, toolset lengkap |
-| **M5** | Rilis Android 1.0 | §2.4–2.5, §9, §11 | Light theme, ekspor, audit a11y — **seluruh §11 lolos** |
-| **M6** | Desktop Linux | §7.4–7.5, §7.10, §8.2 | Tool rail, options bar, docks, command palette |
+| **M0** | Fondasi proyek | — | CI hijau, workspace + shell jalan (APK terbangun) |
+| **M1** | Shell, tema, ikon | §2–§6, §8.2 | Design system terpasang, 25 ikon, jalan di Fedora |
+| **M2** | Kanvas & stroke core | §1, §7.2, §8.2 | Menggambar instan, zoom/pan, drag-numeric |
+| **M3** | Model animasi | §7.7, §8.2, §2.3 | Frame/timeline/playback/onion, `.flip` + autosave |
+| **M4** | UI desktop lengkap | §7, §7.10, §8.2 | Tool rail, options bar, docks, command palette, color, toolset |
+| **M5** | Rilis Linux 1.0 | §2.4–2.5, §9, §11 | Light theme, ekspor, audit a11y — **seluruh §11 lolos** |
+| **M6** | Port Android | §7.12–7.13, §8.1, §6 (haptics) | Bottom toolbar, sheet, gesture sentuh, haptics, edge-to-edge, ekspor MediaStore |
 | **M7** | iOS & distribusi | §1 | Port iOS; wrapper Gradle untuk AAB bila perlu toko aplikasi |
 
 ### 12.2 Rincian per fase
@@ -437,9 +442,9 @@ Fedora) dan checklist §11 diverifikasi pada fase yang ditentukan. CI menjalanka
 
 - Workspace Cargo (`flipbrush-app`, `flipbrush-core`, `flipbrush-platform`),
   `rust-toolchain.toml`, CI (clippy/rustfmt/test).
-- Dokumentasi toolchain Fedora + Android SDK/NDK + `cargo-apk`.
-- **Selesai**: `cargo apk build` menghasilkan APK yang ter-install via `adb` di
-  device nyata.
+- Dokumentasi toolchain Fedora (+ Android SDK/NDK + `cargo-apk` untuk M6).
+- **Selesai**: ✔ `cargo run -p flipbrush-app` menampilkan jendela Fedora; build APK
+  tetap terjaga di CI (`cargo apk build --lib`).
 
 **M1 — Shell, tema, ikon**
 
@@ -447,58 +452,65 @@ Fedora) dan checklist §11 diverifikasi pada fase yang ditentukan. CI menjalanka
   startup (§10).
 - Tipografi §3 (Inter + JetBrains Mono, tabular); pipeline ikon §5 (`build.rs`
   usvg → tessellator egui).
-- Shell `eframe`/wgpu: Android (`android-native-activity`) + Linux; edge-to-edge &
-  safe-area §8.1; motion token §6.
+- Shell `eframe`/wgpu: Linux (prioritas); build Android (`android-native-activity`)
+  dijaga tetap hijau di CI; motion token §6.
 - **Selesai**: ✔ §11 "token & tanpa hard-coded color" (ditegakkan CI), ✔ ikon punya
-  accessible name, jendela Fedora + APK Android jalan.
+  accessible name, jendela Fedora jalan (APK Android terbangun).
 
 **M2 — Kanvas & stroke core**
 
-- Kanvas full-screen: pinch-zoom, pan, 2-finger drag, 2-tap undo, 3-tap redo,
-  tap-lama eyedropper (§8.1).
-- Tool: brush, eraser, fill, eyedropper; slider drag-numeric §7.2; edge-scrub
-  ukuran/hardness (§1.4); mode fokus chrome menyusut (§8.1).
+- Kanvas: zoom (`Ctrl+Scroll` / pinch), pan (space-drag / 2 jari), undo `Ctrl+Z`,
+  redo `Ctrl+Shift+Z`, eyedropper (klik-panjang); gesture sentuh §8.1 (2-tap undo,
+  3-tap redo, edge-scrub) disusul di M6.
+- Tool: brush, eraser, fill, eyedropper; slider drag-numeric §7.2; mode fokus
+  menyembunyikan chrome (`Tab`, §8.2).
 - **Selesai**: stroke selalu instan (§6 — tidak ada I/O blocking di UI thread);
-  touch target ≥ 44 px. *Prototype arbitrase gesture sheet↔kanvas dimulai di sini
-  (risiko M4)*.
+  hover & shortcut desktop responsif.
 
 **M3 — Model animasi**
 
-- Model frame/layer/exposure; timeline strip 72 px + playhead + tombol ± frame +
-  tombol play 56 px (§8.1); grid X-sheet di bottom-sheet dengan state cell §7.7.
+- Model frame/layer/exposure; timeline dock (grid X-sheet: baris = layer, kolom =
+  frame, state cell §7.7) + playhead + kontrol play/prev/next (§8.2).
 - Onion skin (§2.3, merah/biru aman buta warna); playback sinkron FPS.
 - Format `.flip` + autosave/recovery (lihat §13.2).
 - **Selesai**: loop stabil, recover setelah kill proses, zoom timeline
-  pinch/`Ctrl+Scroll`.
+  `Ctrl+Scroll`.
 
-**M4 — UI mobile lengkap** *(fase terbesar; boleh dipecah M4a/M4b tanpa menggeser
+**M4 — UI desktop lengkap** *(fase terbesar; boleh dipecah M4a/M4b tanpa menggeser
 M5/M6)*
-
-- Bottom-sheet infra §7.13 (peek/half/full, drag-handle, gesture disambiguation);
-  bottom toolbar §7.12 + sheet tool; panel Brush/Layers §7.6;
-  color wheel/swatch/harmony §7.3; komponen §7.1/7.8/7.9/7.11; haptics §6 +
-  `gesture-modifier` 40%.
-- Toolset lanjutan: lasso, marquee, wand, shape, transform, text.
-- **Selesai**: semua komponen mobile punya state lengkap (§7); haptics sesuai
-  aturan §6 (tanpa getar saat menggambar/scrub).
-
-**M5 — Rilis Android 1.0**
-
-- Light theme §2.5 + accent picker §2.4; settings ikut sistem (§2.5); ekspor
-  (§13.1); share/open intent `.flip`.
-- Toggle haptics (aksesibilitas §9); uji `prefers-reduced-motion`/
-  `prefers-contrast`; font-scale 130%; audit kontras 4.5:1/3:1; uji
-  notch/punch-hole.
-- **Selesai**: **seluruh checklist §11 lolos** (bagian mobile) + uji visual
-  100%/200% DPI.
-
-**M6 — Desktop Linux**
 
 - Tool rail 48 px §7.4; options bar 40 px §7.5; dock 280 px + timeline dock 200 px,
   resize & persist per proyek §8.2; command palette `Ctrl+K` §7.10; hover, shortcut
   penuh, dense (§1.5); `Tab` mode fokus; HiDPI logical px.
-- **Selesai**: token dipakai ulang tanpa hex baru; layout restore antar sesi;
-  keyboard nav penuh + `Esc` menutup (§9).
+- Panel Color/Brush/Layers §7.6; color wheel/swatch/harmony §7.3; komponen
+  §7.1/7.8/7.9/7.11.
+- Toolset lanjutan: lasso, marquee, wand, shape, transform, text.
+- **Selesai**: semua komponen desktop punya state lengkap (§7); token dipakai ulang
+  tanpa hex baru; layout restore antar sesi; keyboard nav penuh + `Esc` menutup
+  (§9).
+
+**M5 — Rilis Linux 1.0**
+
+- Light theme §2.5 + accent picker §2.4; settings di `~/.config/flipbrush/settings.toml`
+  (§10); ekspor (§13.1 — dialog simpan); asosiasi berkas `.flip` (open/share via
+  desktop).
+- Uji `prefers-reduced-motion`/`prefers-contrast`; audit kontras 4.5:1/3:1;
+  keyboard-only pass.
+- **Selesai**: **seluruh checklist §11 lolos** (bagian desktop) + uji visual
+  100%/200% DPI.
+
+**M6 — Port Android**
+
+- Shell mobile: bottom-sheet infra §7.13 (peek/half/full, drag-handle, arbitrase
+  gesture sheet↔kanvas); bottom toolbar §7.12 + sheet tool; timeline strip 72 px +
+  tombol play 56 px (§8.1); haptics §6 + `gesture-modifier` 40%.
+- Gesture sentuh §8.1: pinch-zoom, 2-finger pan, 2-tap undo, 3-tap redo, tap-lama
+  eyedropper, edge-scrub ukuran/hardness.
+- Edge-to-edge & safe-area §8.1; touch target ≥ 44 px; dark ikut sistem (§2.5);
+  font-scale 130%; ekspor via MediaStore + share intent `.flip`.
+- **Selesai**: komponen mobile state lengkap (§7); haptics sesuai §6 (tanpa getar
+  saat menggambar/scrub); bagian mobile checklist §11 lolos (safe-area notch,
+  touch target); APK rilis ter-install via `adb` di device nyata.
 
 **M7 — iOS & distribusi**
 
@@ -510,11 +522,11 @@ M5/M6)*
 | Checklist §11 | Fase verifikasi |
 |---|---|
 | Token terdefinisi, tanpa hard-coded color | M1 (CI) |
-| Ikon punya accessible name (+tooltip/shortcut desktop) | M1 / M6 |
-| Touch target ≥ 44 px; haptics bekerja | M4 |
-| Kontras, reduced-motion, font-scale 130%, light+dark DPI | M5 |
-| Dark ikut sistem Android; safe-area notch teruji | M5 |
-| Layout desktop tersimpan/dipulihkan | M6 |
+| Ikon punya accessible name (+tooltip/shortcut desktop) | M1 / M4 |
+| Layout desktop tersimpan/dipulihkan; keyboard nav | M4 |
+| Kontras, reduced-motion, light+dark DPI | M5 |
+| Touch target ≥ 44 px; haptics bekerja | M6 |
+| Dark ikut sistem Android; safe-area notch teruji; font-scale 130% | M6 |
 
 ---
 
@@ -531,8 +543,8 @@ M5/M6)*
 
 - Opsi dialog ekspor: rentang frame, fps (default = fps proyek), skala, latar
   (transparan/putih/warna), onion skin **tidak** ikut diekspor.
-- Output: `<nama-proyek>_<timestamp>.<ext>` — Android via MediaStore (Downloads),
-  desktop via dialog simpan.
+- Output: `<nama-proyek>_<timestamp>.<ext>` — Linux via dialog simpan (M5);
+  Android via MediaStore (Downloads, M6).
 - Progres → panel ekspor; hasil sukses/gagal memakai token `success`/`danger` +
   toast §7.8; ekspor berjalan di thread terpisah, tidak memblokir kanvas.
 
@@ -557,17 +569,18 @@ M5/M6)*
   dialog pemulihan memakai token `warning` §2.2. Autosave tidak pernah memblokir
   stroke (§6).
 
-### 13.3 Target performa & baseline perangkat (M1–M5)
+### 13.3 Target performa & baseline perangkat (M1–M6)
 
 | Metrik | Target |
 |---|---|
 | Latensi stroke (input → piksel pertama) | ≤ 1 frame (≤ 16 ms @ 60 Hz), nol blocking I/O di UI thread |
 | FPS kanvas | 60 fps stabil: onion skin 2 frame + 3 layer |
 | Playback | Tepat fps proyek (12/24), tanpa dropped frame |
-| Baseline device | Android 9 (API 28), Vulkan 1.1, RAM 4 GB, layar 1080p (mid-range ~2021) |
+| Baseline desktop (utama) | Fedora Linux terbaru, Mesa/Radeon atau Intel Xe, Vulkan 1.1, RAM 8 GB, layar 1080p |
+| Baseline Android (sekunder, M6) | Android 9 (API 28), Vulkan 1.1, RAM 4 GB, layar 1080p (mid-range ~2021) |
 | Batas proyek v1 | Kanvas maks **4096×4096**, **16 layer**, **600 frame** — di atas itu ditolak dengan pesan jelas |
 | Memori (proyek default 1080², 24 frame, 4 layer) | Working set ≤ 256 MB |
 | Cold start → kanvas siap gambar | ≤ 2,5 s di baseline |
 | Autosave | < 500 ms per save (background), tanpa frame drop |
-| Idle | Tanpa render loop idle (on-demand repaint) — hemat baterai/thermal |
-| Ukuran APK rilis | ≤ 30 MB |
+| Idle | Tanpa render loop idle (on-demand repaint) — hemat CPU/daya |
+| Ukuran artefak rilis (binary Linux / APK) | ≤ 30 MB |

@@ -31,7 +31,8 @@ jobs:
       - name: check hex literal di luar theme.rs (§10)
         run: ./scripts/check-hex-literals.sh
 
-  # Build APK Android tanpa install (device nyata diuji manual, §12.2 M0)
+  # Build APK Android — build dijaga tetap hijau (target sekunder; uji di
+  # device nyata manual, DESIGN.md §12.2 M6)
   android-apk:
     runs-on: ubuntu-latest
     steps:

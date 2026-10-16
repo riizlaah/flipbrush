@@ -1,7 +1,7 @@
 //! Shell aplikasi Flipbrush: entry point, wiring eframe, dan state UI.
 //!
-//! Layout mengikuti DESIGN.md §8 — mobile-first; shell desktop (M6)
-//! memakai komponen yang sama dengan layout berbeda.
+//! Layout mengikuti DESIGN.md §8 — desktop-first (Linux prioritas utama);
+//! shell Android (M6) memakai komponen yang sama dengan layout berbeda.
 
 pub mod theme;
 

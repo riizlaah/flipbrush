@@ -1,4 +1,4 @@
-//! Entry point desktop (Linux — target sekunder M6; dipakai untuk
+//! Entry point desktop (Linux — target utama; dipakai untuk
 //! development harian sejak M0).
 
 use eframe::egui;
