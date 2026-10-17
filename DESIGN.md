@@ -464,8 +464,14 @@ CI menjalankan `clippy`, `rustfmt`, test, dan test dilarangnya hex literal di lu
   3-tap redo, edge-scrub) disusul di M6.
 - Tool: brush, eraser, fill, eyedropper; slider drag-numeric §7.2; mode fokus
   menyembunyikan chrome (`Tab`, §8.2).
-- **Selesai**: stroke selalu instan (§6 — tidak ada I/O blocking di UI thread);
-  hover & shortcut desktop responsif.
+- **Selesai**: ✔ stroke selalu instan (§6 — raster RGBA8 + sampling jarak di
+  `flipbrush-core`, tanpa I/O blocking di UI thread); ✔ zoom `Ctrl+Scroll`/pinch di
+  sekitar kursor + pan space-drag/2 jari; ✔ tool brush/eraser/fill/eyedropper
+  (eyedropper klik-panjang 0,5 dtk, batal bila gerak > 6 px); ✔ slider
+  drag-numeric §7.2 (seret halus, klik ketik manual dengan pilih-seluruh,
+  `←`/`→` ±step, Shift ±10); ✔ undo `Ctrl+Z` / redo `Ctrl+Shift+Z` (riwayat
+  area-kotor 50 langkah); ✔ rail §7.4 + options bar §7.5 + HUD koordinat/zoom;
+  ✔ mode fokus `Tab` (§8.2).
 
 **M3 — Model animasi**
 

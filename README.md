@@ -11,7 +11,7 @@ M0–M7): **[DESIGN.md](DESIGN.md)**.
 |---|---|---|
 | M0 | Fondasi proyek: workspace Cargo, CI, toolchain docs | ✅ |
 | M1 | Shell, tema (§2–§4), ikon (§5) | ✅ |
-| M2 | Kanvas & stroke core | ⬜ |
+| M2 | Kanvas & stroke core | ✅ |
 | M3 | Model animasi, timeline, `.flip` | ⬜ |
 | M4 | UI desktop lengkap (tool rail, docks, command palette, color) | ⬜ |
 | M5 | Rilis Linux 1.0 (light theme, ekspor, a11y) | ⬜ |
@@ -27,7 +27,8 @@ flipbrush-app/       shell eframe/egui; theme.rs = satu-satunya hex literal;
                      typography.rs (gaya §3); icon.rs + build.rs (pipeline §5)
 assets/              font variabel Inter + JetBrains Mono (lisensi OFL) dan
                      25 SVG ikon outline (§5)
-flipbrush-core/      model domain (proyek, frame, layer) — tanpa UI/I/O
+flipbrush-core/      model domain (proyek, frame, layer) + stroke core (raster
+                     RGBA8, kuas/penghapus/fill, riwayat undo) — tanpa UI/I/O
 flipbrush-platform/  jembatan platform (desktop Linux, Android JNI)
 scripts/             check mutu (hex literal §10)
 docs/TOOLCHAIN.md    setup Fedora + Android SDK/NDK + cargo-apk

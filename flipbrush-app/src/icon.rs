@@ -61,6 +61,19 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
 /// Selalu punya tooltip (§7.9, delay 500 ms), focus ring (§9), dan
 /// accessible name via AccessKit (§9).
 pub fn icon_button(ui: &mut Ui, theme: &Theme, icon: Icon, name: &str, selected: bool) -> Response {
+    icon_button_sized(ui, theme, icon, name, selected, BUTTON_PX)
+}
+
+/// Seperti [`icon_button`] dengan sisi tombol pilihan — dipakai tool rail
+/// §7.4 (item 40 px) tanpa mengubah ukuran ikon (§5: 20 px).
+pub fn icon_button_sized(
+    ui: &mut Ui,
+    theme: &Theme,
+    icon: Icon,
+    name: &str,
+    selected: bool,
+    button_px: f32,
+) -> Response {
     let mut button = egui::Button::new("")
         // `selected` → info toggle untuk pembaca layar; frame-nya sendiri
         // di-override di bawah sesuai §7.1.
@@ -69,7 +82,9 @@ pub fn icon_button(ui: &mut Ui, theme: &Theme, icon: Icon, name: &str, selected:
     if selected {
         button = button.fill(theme.accent_brand_subtle);
     }
-    let response = ui.add_sized(Vec2::splat(BUTTON_PX), button);
+    // §5: ikon 20 px; proporsional bila tombol dikecilkan/dibesarkan.
+    let icon_px = (button_px * 0.625).clamp(12.0, ICON_PX);
+    let response = ui.add_sized(Vec2::splat(button_px), button);
 
     let icon_color = if !response.enabled() {
         theme.text_disabled
@@ -80,7 +95,7 @@ pub fn icon_button(ui: &mut Ui, theme: &Theme, icon: Icon, name: &str, selected:
     } else {
         theme.text_secondary
     };
-    let icon_rect = Rect::from_center_size(response.rect.center(), Vec2::splat(ICON_PX));
+    let icon_rect = Rect::from_center_size(response.rect.center(), Vec2::splat(icon_px));
     paint(ui.painter(), icon_rect, icon, icon_color);
 
     if response.has_focus() {
