@@ -1,4 +1,4 @@
-//! Kanvas gambar M2 — DESIGN.md §12.2 (§1, §6, §7.2, §8.2).
+//! Kanvas gambar M2/M3 — DESIGN.md §12.2 (§1, §6, §7.2, §8.2, §2.3).
 //!
 //! - **Viewport**: zoom (`Ctrl+Scroll` / pinch — egui menggabung keduanya ke
 //!   [`egui::InputState::zoom_delta`]) dan pan (Space-drag, dua jari).
@@ -9,6 +9,8 @@
 //!   dari token `surface-1`/`surface-2`, sel 12 px layar stabil terhadap zoom.
 //! - **HUD** koordinat + zoom (`numeric`) di kiri bawah (§1.4 presisi).
 //! - **Klik-panjang** = eyedropper (§12.2) di tool mana pun.
+//! - **Onion skin** (§2.3, M3): frame sebelumnya merah / berikutnya biru —
+//!   aman buta warna (§9) — di atas overlay light table (putih @ 8%).
 //!
 //! Undo/redo berbasis area kotor (before/after per aksi, §12.2 `Ctrl+Z` /
 //! `Ctrl+Shift+Z`). Buffer aktif menyatu dengan model animasi M3: raster +
@@ -21,7 +23,7 @@ use eframe::egui::{
     TextureFilter, TextureHandle, TextureOptions, TextureWrapMode, Ui, Vec2,
     epaint::{ColorImage, StrokeKind},
 };
-use flipbrush_core::anim::{Animation, CelId};
+use flipbrush_core::anim::{Animation, CelId, LayerId};
 use flipbrush_core::raster::{
     Brush, DEFAULT_HISTORY, History, Raster, Rect as PixelRect, RegionBuf, Rgba, StrokeSampler,
 };
@@ -44,6 +46,8 @@ const CHECKER_TEX: usize = 16;
 const LONG_PRESS_S: f64 = 0.5;
 /// Toleransi pergerakan agar klik-panjang tetap sah (px layar).
 const LONG_PRESS_SLACK_PX: f32 = 6.0;
+/// Opasitas siluet onion skin di atas light table (§2.3 — konstanta non-hex).
+const ONION_ALPHA: f32 = 0.5;
 
 // ---------------------------------------------------------------------------
 // Viewport
@@ -149,6 +153,12 @@ pub struct Canvas {
 
     texture: Option<TextureHandle>,
     checker: Option<TextureHandle>,
+    /// Overlay onion skin (§2.3): prev bertint `onion/prev`, next bertint
+    /// `onion/next`, di atas light table — digambar di bawah kanvas aktif.
+    onion: Option<TextureHandle>,
+    /// Kunci cache overlay: (frame, layer, on) — hanya dibangun ulang saat
+    /// berubah (playhead/layer/toggle), bukan tiap frame UI.
+    onion_key: Option<(u32, usize, bool)>,
     /// Penyaring tekstur yang sedang dipakai (krispi saat zoom ≥ 1).
     tex_nearest: bool,
     /// Area kotor menunggu unggahan parsial.
@@ -174,6 +184,8 @@ impl Canvas {
             modified: false,
             texture: None,
             checker: None,
+            onion: None,
+            onion_key: None,
             tex_nearest: false,
             dirty: None,
             stroke: None,
@@ -260,6 +272,47 @@ impl Canvas {
             w: self.raster.width,
             h: self.raster.height,
         });
+    }
+
+    /// Sinkronkan overlay onion skin (§2.3) untuk playhead `frame` pada baris
+    /// layer `layer`; `enabled` = toggle dari timeline. Cukup 6 argumen +
+    /// `self` (batas clippy 7).
+    ///
+    /// Tekstur hanya dibangun ulang saat kunci (frame, layer, enabled)
+    /// berubah; saat mati/tanpa tetangga → overlay dilepas (tanpa light table).
+    /// Handle di-reuse lewat [`TextureHandle::set`] agar bebas churn alokasi.
+    pub fn update_onion(
+        &mut self,
+        ctx: &egui::Context,
+        theme: &Theme,
+        anim: &Animation,
+        frame: u32,
+        layer: usize,
+        enabled: bool,
+    ) {
+        let key = (frame, layer, enabled);
+        if self.onion_key == Some(key) {
+            return;
+        }
+        self.onion_key = Some(key);
+        let image = enabled
+            .then(|| {
+                anim.layer_id(layer)
+                    .and_then(|id| onion_image(theme, anim, id, frame))
+            })
+            .flatten();
+        match (image, self.onion.as_mut()) {
+            (Some(img), Some(handle)) => handle.set(img, tex_options(false)),
+            (Some(img), None) => {
+                self.onion = Some(ctx.load_texture("flipbrush-onion", img, tex_options(false)));
+            }
+            (None, _) => self.onion = None,
+        }
+    }
+
+    /// `true` bila overlay onion (siluet + light table) sedang ditampilkan.
+    pub fn has_onion(&self) -> bool {
+        self.onion.is_some()
     }
 
     /// Undo satu langkah (§12.2 `Ctrl+Z`). `true` bila ada yang di-undo.
@@ -490,6 +543,17 @@ impl Canvas {
             );
             painter.image(checker.id(), doc_rect, uv, Color32::WHITE);
         }
+        // §2.3: light table putih 8% + siluet onion (prev merah / next biru)
+        // — di bawah kanvas aktif, jadi area opak kanvas menutupinya.
+        if let Some(onion) = &self.onion {
+            painter.rect_filled(doc_rect, 0.0, theme.onion_skin_fill);
+            painter.image(
+                onion.id(),
+                doc_rect,
+                Rect::from_min_size(Pos2::ZERO, Vec2::ONE),
+                Color32::WHITE,
+            );
+        }
         // Tepi dokumen (border/strong agar terlihat di atas canvas-surround).
         painter.rect_stroke(
             doc_rect,
@@ -647,6 +711,52 @@ fn checker_image(theme: &Theme) -> ColorImage {
     ColorImage::new([CHECKER_TEX, CHECKER_TEX], pixels)
 }
 
+/// Citra overlay onion (§2.3): frame sebelumnya bertint `onion/prev`, frame
+/// berikutnya bertint `onion/next` (dua-duanya aman buta warna §9), blend
+/// src-over dengan opasitas [`ONION_ALPHA`] × alpha cel. `None` bila tak ada
+/// tetangga playhead yang punya cel — overlay & light table tidak ditampilkan.
+fn onion_image(theme: &Theme, anim: &Animation, layer: LayerId, frame: u32) -> Option<ColorImage> {
+    let prev = frame
+        .checked_sub(1)
+        .and_then(|f| anim.cel_id_at(layer, f))
+        .and_then(|id| anim.cel(id));
+    let next = frame
+        .checked_add(1)
+        .and_then(|f| anim.cel_id_at(layer, f))
+        .and_then(|id| anim.cel(id));
+    if prev.is_none() && next.is_none() {
+        return None;
+    }
+    let w = anim.width as usize;
+    let h = anim.height as usize;
+    let mut pixels = vec![Color32::TRANSPARENT; w * h];
+    for (cel, tint) in [(prev, theme.onion_prev), (next, theme.onion_next)] {
+        let Some(cel) = cel else {
+            continue;
+        };
+        // Semua cel seukuran dokumen; potong bila tidak (region memotong ke
+        // batas raster) — baris tetap rapat ke kiri `stride`.
+        let rect = PixelRect {
+            x: 0,
+            y: 0,
+            w: cel.width.min(anim.width),
+            h: cel.height.min(anim.height),
+        };
+        let stride = rect.w as usize;
+        let data = cel.region(rect);
+        for (i, px) in data.as_chunks::<4>().0.iter().enumerate() {
+            let alpha = (f32::from(px[3]) * ONION_ALPHA).round() as u8;
+            if alpha == 0 {
+                continue;
+            }
+            let on_top = Color32::from_rgba_unmultiplied(tint.r(), tint.g(), tint.b(), alpha);
+            let idx = (i / stride) * w + i % stride;
+            pixels[idx] = pixels[idx].blend(on_top);
+        }
+    }
+    Some(ColorImage::new([w, h], pixels))
+}
+
 /// Bbox prediksi area yang akan tersentuh tempa dari `a` ke `b` (+ margin 2
 /// px di luar radius) — dipakai untuk menyalin "sebelum" **sebelum** tempa.
 fn predict_bbox(a: Vec2, b: Vec2, brush: Brush) -> PixelRect {
@@ -738,5 +848,59 @@ mod tests {
         // radius 10 + margin ≥ 12 px di kiri/kanan garis.
         assert!(r.x <= 38 && r.x + r.w >= 92);
         assert!(r.y <= 38 && r.y + r.h >= 62);
+    }
+
+    #[test]
+    fn onion_image_prev_merah_next_biru_alpha_50() {
+        let theme = Theme::dark();
+        let mut anim = Animation::new(8, 8);
+        let layer = anim.layer_id(0).unwrap();
+
+        // Frame 0 (prev): tempa opak di (2, 4); frame 1 = playhead (tanpa
+        // isi — hanya penanda posisi); frame 2 (next): di (6, 4).
+        let cel0 = anim.expose(layer, 0).unwrap();
+        let mut prev_raster = Raster::new(8, 8);
+        prev_raster.stamp(
+            (2.0, 4.0),
+            Brush {
+                size: 4.0,
+                ..Brush::default()
+            },
+            Rgba::opaque(0, 0, 0),
+            false,
+        );
+        anim.put_cel(cel0, prev_raster);
+        anim.expose(layer, 1).unwrap();
+        let cel2 = anim.expose(layer, 2).unwrap();
+        let mut next_raster = Raster::new(8, 8);
+        next_raster.stamp(
+            (6.0, 4.0),
+            Brush {
+                size: 4.0,
+                ..Brush::default()
+            },
+            Rgba::opaque(0, 0, 0),
+            false,
+        );
+        anim.put_cel(cel2, next_raster);
+
+        let img = onion_image(&theme, &anim, layer, 1).expect("ada tetangga → overlay");
+        let prev_px = img.pixels[4 * 8 + 2];
+        // Alpha = 255 × ONION_ALPHA (0.5) → 128 (bulat); tint onion/prev
+        // merah #FF6B6B → premultiplied: r > g.
+        assert_eq!(prev_px.a(), 128, "opasitas siluet 50% §2.3");
+        assert!(prev_px.r() > prev_px.g(), "prev bertint merah");
+        let next_px = img.pixels[4 * 8 + 6];
+        assert_eq!(next_px.a(), 128, "opasitas sama untuk next");
+        assert!(
+            next_px.b() > next_px.r(),
+            "next bertint biru (aman buta warna §9)"
+        );
+
+        // Frame tanpa tetangga → tanpa overlay (light table pun ikut absen).
+        assert!(
+            onion_image(&theme, &anim, layer, 5).is_none(),
+            "tanpa cel tetangga → None"
+        );
     }
 }

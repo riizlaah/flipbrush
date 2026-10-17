@@ -12,7 +12,7 @@ M0–M7): **[DESIGN.md](DESIGN.md)**.
 | M0 | Fondasi proyek: workspace Cargo, CI, toolchain docs | ✅ |
 | M1 | Shell, tema (§2–§4), ikon (§5) | ✅ |
 | M2 | Kanvas & stroke core | ✅ |
-| M3 | Model animasi, timeline, `.flip` | 🔄 tahap 1 (model + timeline) |
+| M3 | Model animasi, timeline, `.flip` | 🔄 tahap 2 (model + timeline + playback/onion) |
 | M4 | UI desktop lengkap (tool rail, docks, command palette, color) | ⬜ |
 | M5 | Rilis Linux 1.0 (light theme, ekspor, a11y) | ⬜ |
 | M6 | Port Android (sheet, toolbar, gesture, haptics) | ⬜ |

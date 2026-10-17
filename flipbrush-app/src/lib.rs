@@ -118,6 +118,15 @@ impl FlipbrushApp {
     fn ui_inner(&mut self, ui: &mut egui::Ui) {
         self.handle_shortcuts(ui.ctx());
 
+        // Playback sinkron fps proyek (§12.2): majukan playhead tiap frame
+        // UI; repaint kontinu selama bermain agar langkah tak bergantung
+        // input (frame headless pun jalan).
+        let now = ui.ctx().input(|i| i.time);
+        self.timeline.tick(&self.anim, now);
+        if self.timeline.playing {
+            ui.ctx().request_repaint();
+        }
+
         if self.focus_mode {
             // §1/§8.2: mode fokus — hanya kanvas (+ HUD koordinat §1.4).
             egui::CentralPanel::default()
@@ -242,6 +251,16 @@ impl FlipbrushApp {
         let layer_id = self.anim.layer_id(self.timeline.layer);
         let target = layer_id.and_then(|l| self.anim.cel_id_at(l, self.timeline.frame));
         self.canvas.switch_cel(&mut self.anim, target);
+        // Onion skin (§2.3) — setelah pindah cel agar melihat model terkini;
+        // kunci (frame, layer, toggle) menahan rebuild hanya saat berubah.
+        self.canvas.update_onion(
+            ui.ctx(),
+            &self.theme,
+            &self.anim,
+            self.timeline.frame,
+            self.timeline.layer,
+            self.timeline.onion,
+        );
 
         let tool = self.tool;
         let brush = self.brush;
@@ -845,10 +864,19 @@ mod tests {
         )
     }
 
-    /// Posisi tengah tombol transport (prev = pertama, next = kedua).
+    /// Posisi tengah tombol transport (prev = 0, play/pause = 1, next = 2).
     fn transport_btn(index: usize) -> Pos2 {
         let x = 48.0 + theme::spacing::PANEL + index as f32 * (32.0 + theme::spacing::GAP_CONTROL);
         pos2(x + 16.0, SCREEN[1] - timeline::TIMELINE_H + 16.0)
+    }
+
+    /// Posisi tengah toggle onion — ujung kanan transport: `add_space(PANEL)`
+    /// + tombol 32 px dari tepi kanan layar (RTL).
+    fn onion_btn() -> Pos2 {
+        pos2(
+            SCREEN[0] - theme::spacing::PANEL - 16.0,
+            SCREEN[1] - timeline::TIMELINE_H + 16.0,
+        )
     }
 
     #[test]
@@ -866,8 +894,8 @@ mod tests {
         );
         assert_eq!(app.timeline.layer, 0);
 
-        // Klik tombol next/prev di transport (§8.2).
-        click(&mut app, &ctx, transport_btn(1));
+        // Klik tombol next/prev di transport (§8.2): prev=0, play=1, next=2.
+        click(&mut app, &ctx, transport_btn(2));
         assert_eq!(app.timeline.frame, 6, "next frame");
         click(&mut app, &ctx, transport_btn(0));
         assert_eq!(app.timeline.frame, 5, "prev frame");
@@ -1052,5 +1080,94 @@ mod tests {
             app.timeline.frame, 0,
             "timeline tersembunyi di mode fokus §8.2"
         );
+    }
+
+    #[test]
+    fn tombol_play_pause_mengontrol_playback() {
+        let mut app = test_app();
+        let ctx = test_ctx();
+        frame(&mut app, &ctx, vec![]);
+        assert!(!app.timeline.playing, "default berhenti");
+
+        click(&mut app, &ctx, transport_btn(1));
+        assert!(app.timeline.playing, "tombol play memulai playback §12.2");
+
+        click(&mut app, &ctx, transport_btn(1));
+        assert!(!app.timeline.playing, "tombol yang sama jeda kembali");
+    }
+
+    #[test]
+    fn playback_sinkron_fps_dan_loop() {
+        let mut app = test_app();
+        let ctx = test_ctx();
+        // Durasi proyek 3 frame (eksposur frame 1..2; frame 0 menyusul) dan
+        // fps 4 → frame_dur 0.25 s biner-eksak untuk determinisme tes.
+        let layer = app.anim.layer_id(0).unwrap();
+        for f in 1..3 {
+            app.anim.expose(layer, f).unwrap();
+        }
+        app.anim.fps = 4;
+        assert_eq!(app.anim.frames(), 3);
+
+        frame_at(&mut app, &ctx, 10.0, vec![]); // berhenti → play_last = 10.0
+        app.timeline.playing = true;
+
+        frame_at(&mut app, &ctx, 10.25, vec![]);
+        assert_eq!(app.timeline.frame, 1, "0.25 s @ 4 fps = tepat 1 langkah");
+        frame_at(&mut app, &ctx, 10.5, vec![]);
+        assert_eq!(app.timeline.frame, 2, "akumulasi eksak tanpa drift");
+        frame_at(&mut app, &ctx, 10.75, vec![]);
+        assert_eq!(app.timeline.frame, 0, "loop ke awal durasi proyek §12.2");
+
+        // Stall besar (mis. tab di latar) → dt di-clamp MAX_PLAYBACK_DT.
+        frame_at(&mut app, &ctx, 15.75, vec![]);
+        assert_eq!(app.timeline.frame, 1, "dt di-clamp → maju terkendali");
+
+        // Pause: playhead diam walau waktu terus maju.
+        app.timeline.playing = false;
+        frame_at(&mut app, &ctx, 16.0, vec![]);
+        frame_at(&mut app, &ctx, 17.0, vec![]);
+        assert_eq!(app.timeline.frame, 1, "pause menghentikan playback");
+
+        // Play lagi tidak melompat mengejar waktu jeda panjang.
+        app.timeline.playing = true;
+        frame_at(&mut app, &ctx, 17.25, vec![]);
+        assert_eq!(app.timeline.frame, 2, "play setelah jeda tanpa lompat");
+    }
+
+    #[test]
+    fn onion_skin_mengikuti_playhead_dan_toggle() {
+        let mut app = test_app();
+        let ctx = test_ctx();
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.timeline.onion, "onion default menyala (§2.3)");
+        // Frame 0 tanpa tetangga → tanpa overlay (onion_image → None).
+        assert!(!app.canvas.has_onion());
+
+        // Gambar di frame 0; pindah ke frame 1 → cel frame 0 kembali ke
+        // model dan menjadi prev onion.
+        app.color = Rgba::opaque(200, 40, 40);
+        let from = screen_of(&app, Vec2::new(300.0, 300.0));
+        let to = screen_of(&app, Vec2::new(360.0, 300.0));
+        stroke(&mut app, &ctx, from, to);
+        click(&mut app, &ctx, cell_pos(1, 0));
+        assert_eq!(app.timeline.frame, 1);
+        assert!(
+            app.canvas.has_onion(),
+            "prev frame punya cel → overlay tampil §2.3"
+        );
+
+        // Toggle onion di ujung kanan transport → overlay + light table hilang.
+        click(&mut app, &ctx, onion_btn());
+        assert!(!app.timeline.onion, "toggle mematikan onion");
+        assert!(
+            !app.canvas.has_onion(),
+            "overlay dilepas saat dimatikan §2.3"
+        );
+
+        // Nyalakan lagi → overlay pulih (kunci cache berubah → rebuild).
+        click(&mut app, &ctx, onion_btn());
+        assert!(app.timeline.onion);
+        assert!(app.canvas.has_onion(), "toggle menyalakan kembali");
     }
 }

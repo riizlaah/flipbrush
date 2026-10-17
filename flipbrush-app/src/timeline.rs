@@ -8,7 +8,10 @@
 //! - Playhead `text/primary`: garis 1 px + kepala segitiga di header;
 //!   scrub = seret playhead di header kolom; klik cell = pilih frame + layer.
 //! - Zoom timeline `Ctrl+Scroll` (§7.7, §12.2 M3), clamp 8–64 px per kolom.
-//! - Transport (§8.2): prev/next + counter `1-based` + label fps proyek.
+//! - Transport (§8.2): prev/play/next + counter `1-based` + label fps proyek
+//!   + toggle onion skin (§2.3).
+//! - Playback sinkron FPS (§12.2): akumulasi waktu nyata tanpa drift —
+//!   sisa waktu dibawa ke langkah berikutnya, loop ke awal durasi proyek.
 
 use eframe::egui::{
     self, PointerButton, Rect, Sense, Stroke, Ui, Vec2, epaint::PathShape, pos2, vec2,
@@ -46,8 +49,12 @@ const STRIP_BRIGHTEN: f32 = 1.5;
 /// Tampilkan angka header tiap kolom bila lebar kolom ≥ ini; selebihnya
 /// tiap 5 kolom agar tidak tumpang tindih.
 const HEADER_FULL_W: f32 = 16.0;
+/// Clamp dt playback per langkah UI (detik) — cegah lompatan besar saat
+/// proses tertahan/stall, tetap presisi untuk animasi 12–60 fps.
+const MAX_PLAYBACK_DT: f64 = 0.25;
 
-/// State timeline (playhead, layer aktif, zoom kolom, scroll horizontal).
+/// State timeline (playhead, layer aktif, zoom kolom, scroll horizontal,
+/// playback + toggle onion skin).
 pub struct Timeline {
     /// Playhead — indeks frame 0-based.
     pub frame: u32,
@@ -55,7 +62,15 @@ pub struct Timeline {
     pub layer: usize,
     /// Lebar satu kolom frame (px) — zoom timeline §7.7.
     pub cell_w: f32,
+    /// Playback sedang berjalan (§12.2: sinkron fps proyek, loop tanpa drift).
+    pub playing: bool,
+    /// Onion skin aktif (§2.3: prev merah / next biru — aman buta warna §9).
+    pub onion: bool,
     scroll_x: f32,
+    /// Akumulasi sisa waktu (detik) — dibawa antar langkah (tanpa drift).
+    play_acc: f64,
+    /// Waktu UI terakhir yang diproses playback (detik).
+    play_last: f64,
 }
 
 impl Default for Timeline {
@@ -64,7 +79,11 @@ impl Default for Timeline {
             frame: 0,
             layer: 0,
             cell_w: CELL_W,
+            playing: false,
+            onion: true,
             scroll_x: 0.0,
+            play_acc: 0.0,
+            play_last: 0.0,
         }
     }
 }
@@ -142,7 +161,36 @@ impl Timeline {
         self.paint(ui, theme, anim, rect, first_col, last_visible.min(cols));
     }
 
-    /// Bar transport §8.2: prev/next + counter + fps (tinggi pasti 32 px).
+    /// Majukan playback sinkron fps proyek (§12.2) pada waktu UI `now`
+    /// (detik, monotomik). `true` bila playhead berubah — loop ke awal
+    /// durasi proyek (`anim.frames()`) tanpa drift (sisa waktu dibawa,
+    /// langkah dibulatkan agar aman untuk fps ekstrem).
+    pub fn tick(&mut self, anim: &Animation, now: f64) -> bool {
+        if !self.playing {
+            // Saat jeda play_last ikut di-update & akumulasi direset —
+            // play lagi tidak "melompat" mengejar waktu jeda panjang.
+            self.play_last = now;
+            self.play_acc = 0.0;
+            return false;
+        }
+        let dt = (now - self.play_last).clamp(0.0, MAX_PLAYBACK_DT);
+        self.play_last = now;
+        self.play_acc += dt;
+        let frame_dur = 1.0 / f64::from(anim.fps.max(1));
+        let steps = (self.play_acc / frame_dur).floor();
+        if steps < 1.0 {
+            return false;
+        }
+        self.play_acc = (self.play_acc - steps * frame_dur).max(0.0);
+        let total = u64::from(anim.frames().max(1));
+        let advance = steps as u64 % total;
+        let before = self.frame;
+        self.frame = ((u64::from(self.frame) + advance) % total) as u32;
+        self.frame != before
+    }
+
+    /// Bar transport §8.2: prev/play/next + counter + fps + toggle onion
+    /// (tinggi pasti 32 px).
     fn transport(&mut self, ui: &mut Ui, theme: &Theme, anim: &Animation) {
         let max_frame = anim.frames().max(MIN_COLUMNS) - 1;
         ui.allocate_ui(Vec2::new(ui.available_width(), TRANSPORT_H), |ui| {
@@ -153,6 +201,16 @@ impl Timeline {
                     .clicked()
                 {
                     self.frame = self.frame.saturating_sub(1);
+                }
+                let play_icon = if self.playing {
+                    Icon::Pause
+                } else {
+                    Icon::Play
+                };
+                let play_name = if self.playing { "Jeda" } else { "Putar" };
+                if icon::icon_button(ui, theme, play_icon, play_name, self.playing).clicked() {
+                    self.playing = !self.playing;
+                    self.play_acc = 0.0;
                 }
                 if icon::icon_button(ui, theme, Icon::NextFrame, "Frame berikutnya", false)
                     .clicked()
@@ -169,6 +227,14 @@ impl Timeline {
                         .rich(format!("{} fps", anim.fps))
                         .color(theme.text_secondary),
                 );
+                // Toggle onion skin (§2.3) — menempel di ujung kanan transport.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add_space(theme::spacing::PANEL);
+                    if icon::icon_button(ui, theme, Icon::Onion, "Onion skin", self.onion).clicked()
+                    {
+                        self.onion = !self.onion;
+                    }
+                });
             });
         });
     }

@@ -474,13 +474,17 @@ CI menjalankan `clippy`, `rustfmt`, test, dan test dilarangnya hex literal di lu
   ✔ mode fokus `Tab` (§8.2).
 
 **M3 — Model animasi** *(bertahap: tahap 1 model+timeline ✔, tahap 2 playback
-+onion, tahap 3 `.flip`+autosave)*
++onion ✔, tahap 3 `.flip`+autosave)*
 
 - ✔ (tahap 1) Model frame/layer/exposure (core `anim`); timeline dock (grid
   X-sheet: baris = layer, kolom = frame, state cell §7.7) + playhead +
   kontrol prev/next (§8.2); buffer cel aktif + riwayat per cel; zoom timeline
   `Ctrl+Scroll`.
-- Onion skin (§2.3, merah/biru aman buta warna); playback sinkron FPS.
+- ✔ (tahap 2) Playback sinkron FPS (§12.2: play/pause, loop ke awal durasi
+  proyek, akumulasi tanpa drift, `dt` di-clamp saat jeda panjang) + onion
+  skin (§2.3: siluet prev merah / next biru aman buta warna di atas light
+  table putih 8%, di bawah kanvas aktif) dengan play/pause & toggle onion di
+  transport (§8.2).
 - Format `.flip` + autosave/recovery (lihat §13.2).
 - **Selesai**: loop stabil, recover setelah kill proses, zoom timeline
   `Ctrl+Scroll`.
