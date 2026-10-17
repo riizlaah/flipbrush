@@ -11,13 +11,17 @@
 //! - **Klik-panjang** = eyedropper (§12.2) di tool mana pun.
 //!
 //! Undo/redo berbasis area kotor (before/after per aksi, §12.2 `Ctrl+Z` /
-//! `Ctrl+Shift+Z`).
+//! `Ctrl+Shift+Z`). Buffer aktif menyatu dengan model animasi M3: raster +
+//! riwayat cel aktif dipertukarkan lewat [`Canvas::switch_cel`].
+
+use std::collections::HashMap;
 
 use eframe::egui::{
     self, Color32, CornerRadius, CursorIcon, Key, PointerButton, Pos2, Rect, Sense, Stroke,
     TextureFilter, TextureHandle, TextureOptions, TextureWrapMode, Ui, Vec2,
     epaint::{ColorImage, StrokeKind},
 };
+use flipbrush_core::anim::{Animation, CelId};
 use flipbrush_core::raster::{
     Brush, DEFAULT_HISTORY, History, Raster, Rect as PixelRect, RegionBuf, Rgba, StrokeSampler,
 };
@@ -124,14 +128,24 @@ struct Press {
     long: bool,
 }
 
-/// Kanvas M2: satu bitmap (proyek default §13.3: 1080²), viewport, riwayat.
+/// Kanvas M2/M3: buffer editing satu cel (proyek default §13.3: 1080²),
+/// viewport, riwayat. Raster di sini adalah **buffer kerja** cel aktif —
+/// model [`Animation`] memegang cel-cel lain; lihat [`Canvas::switch_cel`].
 pub struct Canvas {
-    /// Isi piksel dokumen (RGBA8 lurus — lihat `flipbrush_core::raster`).
+    /// Isi piksel buffer cel aktif (RGBA8 lurus — `flipbrush_core::raster`).
     pub raster: Raster,
-    /// Riwayat undo/redo berbasis area kotor.
+    /// Riwayat undo/redo buffer aktif (berbasis area kotor).
     pub history: History,
     /// Transformasi layar ⇄ dokumen.
     pub viewport: Viewport,
+
+    /// Cel yang sedang diedit (None = buffer kosong, belum punya exposure).
+    active_cel: Option<CelId>,
+    /// Riwayat per cel — dipindahkan bersama raster saat buffer berpindah.
+    histories: HashMap<CelId, History>,
+    /// Ada piksel berubah di frame UI ini (sinyal: expose cel baru bila
+    /// posisi playhead belum punya exposure).
+    modified: bool,
 
     texture: Option<TextureHandle>,
     checker: Option<TextureHandle>,
@@ -155,6 +169,9 @@ impl Canvas {
             raster: Raster::new(width, height),
             history: History::new(DEFAULT_HISTORY),
             viewport: Viewport::default(),
+            active_cel: None,
+            histories: HashMap::new(),
+            modified: false,
             texture: None,
             checker: None,
             tex_nearest: false,
@@ -173,11 +190,76 @@ impl Canvas {
         Vec2::new(self.raster.width as f32, self.raster.height as f32)
     }
 
-    /// Tandai area perlu digambar ulang ke tekstur.
+    /// Tandai area perlu digambar ulang ke tekstur; sekaligus menandai
+    /// buffer berubah (untuk expose cel baru — M3).
     fn mark_dirty(&mut self, rect: PixelRect) {
         if !rect.is_empty() {
             self.dirty = Some(self.dirty.unwrap_or(PixelRect::EMPTY).union(rect));
+            self.modified = true;
         }
+    }
+
+    /// Cel yang sedang diedit buffer ini (None = belum punya exposure).
+    pub fn active_cel(&self) -> Option<CelId> {
+        self.active_cel
+    }
+
+    /// Sinyal "piksel berubah frame ini" — di-reset setelah dibaca; dipakai
+    /// app untuk expose cel baru di posisi playhead yang masih kosong.
+    pub fn take_modified(&mut self) -> bool {
+        std::mem::take(&mut self.modified)
+    }
+
+    /// Daftarkan buffer aktif sebagai cel baru (exposure di posisi playhead
+    /// yang sebelumnya kosong). Raster TIDAK disalin — tetap di buffer.
+    pub fn adopt_cel(&mut self, cel: CelId) {
+        self.active_cel = Some(cel);
+    }
+
+    /// Pindahkan buffer editing ke cel `target` (None = buffer kosong).
+    ///
+    /// Cel lama dikembalikan ke model beserta raster + riwayatnya; cel baru
+    /// diambil dari model (atau dibuat kosong bila tak tersimpan — cel baru
+    /// diekspos tapi belum pernah disimpan). Tekstur diunggah ulang penuh
+    /// (isi berbeda, dimensi sama).
+    pub fn switch_cel(&mut self, anim: &mut Animation, target: Option<CelId>) {
+        if self.active_cel == target {
+            return;
+        }
+        // Kembalikan cel lama ke model (bila punya), beserta riwayatnya.
+        if let Some(old) = self.active_cel.take() {
+            let old_raster =
+                std::mem::replace(&mut self.raster, Raster::new(anim.width, anim.height));
+            anim.put_cel(old, old_raster);
+            let old_history = std::mem::replace(&mut self.history, History::new(DEFAULT_HISTORY));
+            self.histories.insert(old, old_history);
+        } else {
+            self.raster = Raster::new(anim.width, anim.height);
+            self.history = History::new(DEFAULT_HISTORY);
+        }
+        // Muat cel target (raster bisa belum tersimpan — buffer kosong).
+        if let Some(id) = target {
+            self.raster = anim
+                .take_cel(id)
+                .unwrap_or_else(|| Raster::new(anim.width, anim.height));
+            self.history = self
+                .histories
+                .remove(&id)
+                .unwrap_or_else(|| History::new(DEFAULT_HISTORY));
+            self.active_cel = Some(id);
+        }
+        // Reset state interaksi + unggah ulang penuh. Viewport tetap —
+        // dokumen tidak berubah ukuran, jadi tanpa refit.
+        self.stroke = None;
+        self.press = None;
+        self.last_doc = None;
+        self.was_down = false;
+        self.dirty = Some(PixelRect {
+            x: 0,
+            y: 0,
+            w: self.raster.width,
+            h: self.raster.height,
+        });
     }
 
     /// Undo satu langkah (§12.2 `Ctrl+Z`). `true` bila ada yang di-undo.

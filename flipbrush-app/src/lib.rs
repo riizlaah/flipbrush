@@ -8,20 +8,28 @@
 //! M2 (§12.2): kanvas & stroke core — tool rail §7.4 (48 px), options bar
 //! §7.5 (40 px) dengan slider drag-numeric §7.2, kanvas zoom/pan/undo/redo,
 //! mode fokus `Tab` (§8.2), stroke selalu instan (§6, §13.3).
+//! M3 tahap 1 (§12.2): model animasi (layer/frame/exposure — core `anim`),
+//! timeline dock X-sheet §7.7 (200 px, playhead, prev/next, zoom
+//! `Ctrl+Scroll`), buffer cel aktif di kanvas (riwayat per cel).
 
 pub mod canvas;
 pub mod icon;
 pub mod slider;
 pub mod theme;
+pub mod timeline;
 pub mod tool;
 pub mod typography;
 
 use eframe::egui;
 
-use flipbrush_core::raster::{Brush, Rgba};
+use flipbrush_core::{
+    anim::Animation,
+    raster::{Brush, Rgba},
+};
 
 use canvas::Canvas;
 use theme::Theme;
+use timeline::Timeline;
 use tool::Tool;
 use typography::Type;
 
@@ -50,7 +58,11 @@ pub struct FlipbrushApp {
     color: Rgba,
     /// Mode fokus `Tab` (§1, §8.2): sembunyikan chrome, hanya kanvas.
     focus_mode: bool,
-    /// Kanvas + viewport + riwayat (§12.2 M2).
+    /// Model animasi M3: layer, frame, cel, exposure (DESIGN §12.2).
+    anim: Animation,
+    /// State timeline M3: playhead, layer aktif, zoom kolom (§7.7).
+    timeline: Timeline,
+    /// Kanvas + viewport + riwayat (§12.2 M2/M3).
     canvas: Canvas,
 }
 
@@ -95,6 +107,8 @@ impl FlipbrushApp {
                 a: 255,
             },
             focus_mode: false,
+            anim: Animation::new(DEFAULT_CANVAS, DEFAULT_CANVAS),
+            timeline: Timeline::default(),
             canvas: Canvas::new(DEFAULT_CANVAS, DEFAULT_CANVAS),
         }
     }
@@ -129,6 +143,15 @@ impl FlipbrushApp {
             .frame(egui::Frame::NONE.fill(self.theme.surface_1))
             .show(ui, |ui| {
                 self.options_bar(ui);
+            });
+
+        // §8.2: timeline dock 200 px di bawah kanvas (grid X-sheet §7.7).
+        egui::Panel::bottom("timeline")
+            .exact_size(timeline::TIMELINE_H)
+            .resizable(false)
+            .frame(egui::Frame::NONE.fill(self.theme.surface_1))
+            .show(ui, |ui| {
+                self.timeline.show(ui, &self.theme, &self.anim);
             });
 
         egui::CentralPanel::default()
@@ -214,11 +237,27 @@ impl FlipbrushApp {
     }
 
     fn show_canvas(&mut self, ui: &mut egui::Ui) {
+        // M3: buffer kanvas mengikuti (playhead × layer aktif) — pindah cel
+        // dulu (menukar raster + riwayat), baru proses input.
+        let layer_id = self.anim.layer_id(self.timeline.layer);
+        let target = layer_id.and_then(|l| self.anim.cel_id_at(l, self.timeline.frame));
+        self.canvas.switch_cel(&mut self.anim, target);
+
         let tool = self.tool;
         let brush = self.brush;
         let tolerance = self.fill_tolerance.round() as u8;
         self.canvas
             .show(ui, &self.theme, tool, brush, tolerance, &mut self.color);
+
+        // Menggambar di posisi playhead yang masih kosong → expose cel baru
+        // (raster tetap di buffer; model hanya mencatat exposure §7.7).
+        if self.canvas.take_modified()
+            && self.canvas.active_cel().is_none()
+            && let Some(layer_id) = layer_id
+            && let Some(cel) = self.anim.expose(layer_id, self.timeline.frame)
+        {
+            self.canvas.adopt_cel(cel);
+        }
     }
 
     /// Shortcut desktop §12.2: tool `B/E/G/I`, undo `Ctrl+Z`, redo
@@ -339,6 +378,8 @@ mod tests {
                 a: 255,
             },
             focus_mode: false,
+            anim: Animation::new(DEFAULT_CANVAS, DEFAULT_CANVAS),
+            timeline: Timeline::default(),
             canvas: Canvas::new(DEFAULT_CANVAS, DEFAULT_CANVAS),
         }
     }
@@ -783,5 +824,233 @@ mod tests {
         stroke(&mut app, &ctx, from, to);
         let px = app.canvas.raster.pixel(510, 500).unwrap();
         assert!(px.a < 255, "eraser mengurangi alpha ({} < 255)", px.a);
+    }
+
+    // ---------------------------------------------------------------------
+    // M3 tahap 1 (§12.2) — model animasi + timeline X-sheet + buffer cel
+    // ---------------------------------------------------------------------
+
+    /// Posisi layar: kiri grid X-sheet (rail 48 + label layer 112).
+    const GRID_LEFT: f32 = 48.0 + 112.0;
+    /// Atas area grid (timeline 200 px dari bawah + transport 32 + header 20).
+    const GRID_TOP: f32 = SCREEN[1] - timeline::TIMELINE_H + 32.0 + timeline::HEADER_H;
+    /// Lebar sel default timeline.
+    const TL_CELL_W: f32 = timeline::CELL_W;
+
+    /// Titik tengah cell (frame, baris layer) di grid X-sheet.
+    fn cell_pos(frame: u32, row: usize) -> Pos2 {
+        pos2(
+            GRID_LEFT + frame as f32 * TL_CELL_W + TL_CELL_W * 0.5,
+            GRID_TOP + row as f32 * timeline::ROW_H + timeline::ROW_H * 0.5,
+        )
+    }
+
+    /// Posisi tengah tombol transport (prev = pertama, next = kedua).
+    fn transport_btn(index: usize) -> Pos2 {
+        let x = 48.0 + theme::spacing::PANEL + index as f32 * (32.0 + theme::spacing::GAP_CONTROL);
+        pos2(x + 16.0, SCREEN[1] - timeline::TIMELINE_H + 16.0)
+    }
+
+    #[test]
+    fn timeline_klik_cell_menggerakkan_playhead() {
+        let mut app = test_app();
+        let ctx = test_ctx();
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!((app.timeline.frame, app.timeline.layer), (0, 0));
+
+        // Klik cell frame 5 baris 0 → playhead pindah.
+        click(&mut app, &ctx, cell_pos(5, 0));
+        assert_eq!(
+            app.timeline.frame, 5,
+            "klik cell menggerakkan playhead §7.7"
+        );
+        assert_eq!(app.timeline.layer, 0);
+
+        // Klik tombol next/prev di transport (§8.2).
+        click(&mut app, &ctx, transport_btn(1));
+        assert_eq!(app.timeline.frame, 6, "next frame");
+        click(&mut app, &ctx, transport_btn(0));
+        assert_eq!(app.timeline.frame, 5, "prev frame");
+    }
+
+    #[test]
+    fn timeline_klik_cell_layer_kedua_memilih_baris() {
+        let mut app = test_app();
+        let ctx = test_ctx();
+        frame(&mut app, &ctx, vec![]);
+        // Tambah layer lewat model (UI tambah layer menyusul M4).
+        app.anim.add_layer("Line").unwrap();
+        frame(&mut app, &ctx, vec![]);
+
+        // Baris 0 = layer atas (baru), baris 1 = layer default.
+        click(&mut app, &ctx, cell_pos(2, 1));
+        assert_eq!(app.timeline.frame, 2);
+        assert_eq!(app.timeline.layer, 1, "klik baris memilih layer");
+        assert_eq!(
+            app.anim.layer_id(app.timeline.layer),
+            Some(1),
+            "baris 1 = layer default (id 1)"
+        );
+    }
+
+    #[test]
+    fn menggambar_mengekspos_cel_dan_pindah_frame_menukar_buffer() {
+        let mut app = test_app();
+        let ctx = test_ctx();
+        frame(&mut app, &ctx, vec![]);
+
+        // Gambar merah di frame 0.
+        app.color = Rgba::opaque(200, 40, 40);
+        let from = screen_of(&app, Vec2::new(300.0, 300.0));
+        let to = screen_of(&app, Vec2::new(360.0, 300.0));
+        stroke(&mut app, &ctx, from, to);
+
+        let layer = app.anim.layer_id(0).unwrap();
+        let cel0 = app
+            .anim
+            .cel_id_at(layer, 0)
+            .expect("menggambar mengekspos cel baru (§7.7)");
+        assert_eq!(app.canvas.active_cel(), Some(cel0), "buffer = cel frame 0");
+
+        // Pindah ke frame 1 (masih kosong) → buffer kosong, cel 0 di model.
+        click(&mut app, &ctx, cell_pos(1, 0));
+        assert_eq!(app.timeline.frame, 1);
+        assert_eq!(
+            app.canvas.active_cel(),
+            None,
+            "frame 1 kosong — buffer tanpa cel"
+        );
+        assert!(
+            app.anim.cel(cel0).is_some(),
+            "cel frame 0 dikembalikan ke model (raster tidak hilang)"
+        );
+        assert_eq!(
+            app.canvas.raster.pixel(330, 300).unwrap().a,
+            0,
+            "buffer fresh transparan"
+        );
+
+        // Gambar biru di frame 1 → cel terpisah.
+        app.color = Rgba::opaque(40, 40, 200);
+        let from = screen_of(&app, Vec2::new(300.0, 300.0));
+        let to = screen_of(&app, Vec2::new(360.0, 300.0));
+        stroke(&mut app, &ctx, from, to);
+        let cel1 = app.anim.cel_id_at(layer, 1).expect("ekspos cel frame 1");
+        assert_ne!(cel0, cel1, "tiap frame punya cel unik (§13.2)");
+
+        // Kembali ke frame 0 → isi merah utuh (buffer diambil dari model).
+        click(&mut app, &ctx, cell_pos(0, 0));
+        let px = app.canvas.raster.pixel(330, 300).unwrap();
+        assert_eq!((px.r, px.g, px.b), (200, 40, 40), "isi frame 0 pulih");
+
+        // Frame 1 masih biru di model.
+        let back = app.anim.cel(cel1).expect("cel frame 1 tersimpan");
+        assert_eq!(
+            (
+                back.pixel(330, 300).unwrap().r,
+                back.pixel(330, 300).unwrap().b
+            ),
+            (40, 200),
+            "isi frame 1 utuh di model"
+        );
+    }
+
+    #[test]
+    fn riwayat_undo_terpisah_per_cel() {
+        let mut app = test_app();
+        let ctx = test_ctx();
+        frame(&mut app, &ctx, vec![]);
+
+        // Stroke di frame 0 → riwayatnya milik cel 0.
+        let from = screen_of(&app, Vec2::new(200.0, 200.0));
+        let to = screen_of(&app, Vec2::new(260.0, 200.0));
+        stroke(&mut app, &ctx, from, to);
+        assert!(app.canvas.history.can_undo());
+
+        // Pindah ke frame 1 → buffer fresh, tanpa riwayat.
+        click(&mut app, &ctx, cell_pos(1, 0));
+        assert!(
+            !app.canvas.history.can_undo(),
+            "riwayat ikut cel — frame 1 bersih"
+        );
+        frame(&mut app, &ctx, vec![key(egui::Key::Z, Modifiers::CTRL)]);
+        assert_eq!(
+            app.canvas.raster.pixel(230, 200).unwrap().a,
+            0,
+            "undo di frame kosong tidak berbuat apa-apa"
+        );
+
+        // Kembali ke frame 0 → riwayat cel 0 pulih, undo berfungsi.
+        click(&mut app, &ctx, cell_pos(0, 0));
+        assert!(app.canvas.history.can_undo(), "riwayat cel 0 pulih");
+        frame(&mut app, &ctx, vec![key(egui::Key::Z, Modifiers::CTRL)]);
+        assert_eq!(
+            app.canvas.raster.pixel(230, 200).unwrap().a,
+            0,
+            "undo menghapus stroke frame 0 (per-cel)"
+        );
+    }
+
+    #[test]
+    fn zoom_timeline_ctrl_scroll() {
+        let mut app = test_app();
+        let ctx = test_ctx();
+        frame(&mut app, &ctx, vec![]);
+
+        let hover = cell_pos(3, 0);
+        let w0 = app.timeline.cell_w;
+        frame(
+            &mut app,
+            &ctx,
+            vec![
+                egui::Event::PointerMoved(hover),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: Vec2::new(0.0, 1.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: Modifiers::CTRL,
+                },
+            ],
+        );
+        assert!(
+            app.timeline.cell_w > w0,
+            "Ctrl+Scroll memperbesar zoom timeline (§7.7): {w0} → {}",
+            app.timeline.cell_w
+        );
+
+        let w1 = app.timeline.cell_w;
+        frame(
+            &mut app,
+            &ctx,
+            vec![
+                egui::Event::PointerMoved(hover),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: Vec2::new(0.0, -1.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: Modifiers::CTRL,
+                },
+            ],
+        );
+        assert!(
+            app.timeline.cell_w < w1,
+            "Ctrl+Scroll negatif mengecilkan zoom timeline"
+        );
+    }
+
+    #[test]
+    fn mode_fokus_menyembunyikan_timeline() {
+        let mut app = test_app();
+        let ctx = test_ctx();
+        frame(&mut app, &ctx, vec![]);
+        // Di mode fokus, klik area timeline tidak menggerakkan playhead
+        // (panel tidak dirender).
+        frame(&mut app, &ctx, vec![key(egui::Key::Tab, Modifiers::NONE)]);
+        assert!(app.focus_mode);
+        click(&mut app, &ctx, cell_pos(4, 0));
+        assert_eq!(
+            app.timeline.frame, 0,
+            "timeline tersembunyi di mode fokus §8.2"
+        );
     }
 }

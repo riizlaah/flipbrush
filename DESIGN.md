@@ -473,10 +473,13 @@ CI menjalankan `clippy`, `rustfmt`, test, dan test dilarangnya hex literal di lu
   area-kotor 50 langkah); ✔ rail §7.4 + options bar §7.5 + HUD koordinat/zoom;
   ✔ mode fokus `Tab` (§8.2).
 
-**M3 — Model animasi**
+**M3 — Model animasi** *(bertahap: tahap 1 model+timeline ✔, tahap 2 playback
++onion, tahap 3 `.flip`+autosave)*
 
-- Model frame/layer/exposure; timeline dock (grid X-sheet: baris = layer, kolom =
-  frame, state cell §7.7) + playhead + kontrol play/prev/next (§8.2).
+- ✔ (tahap 1) Model frame/layer/exposure (core `anim`); timeline dock (grid
+  X-sheet: baris = layer, kolom = frame, state cell §7.7) + playhead +
+  kontrol prev/next (§8.2); buffer cel aktif + riwayat per cel; zoom timeline
+  `Ctrl+Scroll`.
 - Onion skin (§2.3, merah/biru aman buta warna); playback sinkron FPS.
 - Format `.flip` + autosave/recovery (lihat §13.2).
 - **Selesai**: loop stabil, recover setelah kill proses, zoom timeline
