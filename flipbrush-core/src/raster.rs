@@ -139,6 +139,7 @@ impl Default for Brush {
 }
 
 /// Bitmap RGBA8 lurus — isi satu cel (M3 akan memakai ini per frame/layer).
+#[derive(Clone, PartialEq)]
 pub struct Raster {
     pub width: u32,
     pub height: u32,

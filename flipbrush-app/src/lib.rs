@@ -11,14 +11,20 @@
 //! M3 tahap 1 (§12.2): model animasi (layer/frame/exposure — core `anim`),
 //! timeline dock X-sheet §7.7 (200 px, playhead, prev/next, zoom
 //! `Ctrl+Scroll`), buffer cel aktif di kanvas (riwayat per cel).
+//! M3 tahap 3 (§12.2, §13.2): format `.flip` (simpan/buka — `project`),
+//! autosave background 30 dtk setelah perubahan terakhir, dan dialog
+//! pemulihan startup (token `warning` §2.2).
 
 pub mod canvas;
 pub mod icon;
+pub mod project;
 pub mod slider;
 pub mod theme;
 pub mod timeline;
 pub mod tool;
 pub mod typography;
+
+use std::path::{Path, PathBuf};
 
 use eframe::egui;
 
@@ -64,6 +70,8 @@ pub struct FlipbrushApp {
     timeline: Timeline,
     /// Kanvas + viewport + riwayat (§12.2 M2/M3).
     canvas: Canvas,
+    /// Persistensi `.flip`: file utama, autosave, pemulihan (§13.2).
+    project: project::State,
 }
 
 impl FlipbrushApp {
@@ -110,6 +118,8 @@ impl FlipbrushApp {
             anim: Animation::new(DEFAULT_CANVAS, DEFAULT_CANVAS),
             timeline: Timeline::default(),
             canvas: Canvas::new(DEFAULT_CANVAS, DEFAULT_CANVAS),
+            // §13.2: deteksi autosave pemulihan + thread autosave 30 dtk.
+            project: project::State::new(project::data_dir(), project::AUTOSAVE_DELAY),
         }
     }
 
@@ -127,11 +137,26 @@ impl FlipbrushApp {
             ui.ctx().request_repaint();
         }
 
+        // Autosave §13.2 — debounce 30 dtk setelah perubahan TERAKHIR; cel
+        // buffer di-flush ke model agar snapshot utuh, lalu encode+tulis
+        // berjalan di thread background (UI tak menunggu I/O, §13.3). UI ini
+        // event-driven: saat menunggu, minta dibangunkan tepat pada jadwal
+        // (`request_repaint_after`) — autosave jalan walau aplikasi diam.
+        match self.project.autosave_in() {
+            Some(sisa) if sisa.is_zero() => {
+                let snapshot = self.flushed(|anim| anim.clone());
+                self.project.autosave_send(snapshot);
+            }
+            Some(sisa) => ui.ctx().request_repaint_after(sisa),
+            None => {}
+        }
+
         if self.focus_mode {
             // §1/§8.2: mode fokus — hanya kanvas (+ HUD koordinat §1.4).
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
                 .show(ui, |ui| self.show_canvas(ui));
+            self.recovery_dialog(ui.ctx());
             return;
         }
 
@@ -166,6 +191,10 @@ impl FlipbrushApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ui, |ui| self.show_canvas(ui));
+
+        // §13.2: dialog pemulihan digambar terakhir — lapisan modal di atas
+        // seluruh chrome sampai pengguna memilih pulihkan/buang.
+        self.recovery_dialog(ui.ctx());
     }
 
     /// Isi options bar §7.5: kontrol spesifik tool + swatch warna kanan.
@@ -270,13 +299,124 @@ impl FlipbrushApp {
 
         // Menggambar di posisi playhead yang masih kosong → expose cel baru
         // (raster tetap di buffer; model hanya mencatat exposure §7.7).
-        if self.canvas.take_modified()
+        // Setiap perubahan piksel juga menandai jadwal autosave (§13.2).
+        let modified = self.canvas.take_modified();
+        if modified {
+            self.project.mark_changed();
+        }
+        if modified
             && self.canvas.active_cel().is_none()
             && let Some(layer_id) = layer_id
             && let Some(cel) = self.anim.expose(layer_id, self.timeline.frame)
         {
             self.canvas.adopt_cel(cel);
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Persistensi `.flip` — simpan/buka/autosave/pemulihan (§13.2)
+    // ------------------------------------------------------------------
+
+    /// Kembalikan cel aktif ke model, jalankan `f` pada proyek utuh, lalu
+    /// pasang lagi — simpan/autosave wajib melihat SEMUA cel termasuk yang
+    /// masih di buffer editing (§13.2).
+    fn flushed<R>(&mut self, f: impl FnOnce(&Animation) -> R) -> R {
+        let target = self.canvas.active_cel();
+        self.canvas.switch_cel(&mut self.anim, None);
+        let hasil = f(&self.anim);
+        self.canvas.switch_cel(&mut self.anim, target);
+        hasil
+    }
+
+    /// Simpan proyek ke `path` (`.flip` §13.2): encode (buffer flush) →
+    /// tulis aman `*.tmp` → rename atomik → autosave dibuang, karena simpan
+    /// manual sukses membuatnya tak lagi perlu. Dialog simpan menyusul M5.
+    pub fn save_to(&mut self, path: &Path) -> Result<(), String> {
+        let created = self.project.created_unix();
+        let bytes = self
+            .flushed(|anim| {
+                flipbrush_core::flip::encode(
+                    anim,
+                    created,
+                    project::unix_now(),
+                    env!("CARGO_PKG_VERSION"),
+                )
+            })
+            .map_err(|e| e.to_string())?;
+        project::atomic_write(path, &bytes).map_err(|e| e.to_string())?;
+        self.project.note_saved(path.to_owned());
+        Ok(())
+    }
+
+    /// Buka file `.flip` sebagai proyek utama (dialog buka — M5).
+    pub fn load_from(&mut self, path: &Path) -> Result<(), String> {
+        self.open_flip(path, Some(path.to_owned()))
+    }
+
+    /// Baca `.flip` lalu gantikan seluruh state (buka file & pemulihan §13.2).
+    /// Buffer lama tak di-flush — isinya memang diganti; canvas dibuat baru
+    /// mengikuti dimensi dokumen yang baru.
+    fn open_flip(&mut self, path: &Path, jadikan: Option<PathBuf>) -> Result<(), String> {
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        let proyek = flipbrush_core::flip::decode(&bytes).map_err(|e| e.to_string())?;
+        self.anim = proyek.anim;
+        self.timeline = Timeline::default();
+        self.canvas = Canvas::new(self.anim.width, self.anim.height);
+        self.project.adopt(proyek.created_unix, jadikan);
+        Ok(())
+    }
+
+    /// Dialog pemulihan startup (§13.2): autosave lebih baru dari file utama
+    /// → tawarkan pulihkan/buang. Modal memblokir interaksi latar; peringatan
+    /// memakai token `warning` §2.2. Dialog bertahan sampai dipilih.
+    fn recovery_dialog(&mut self, ctx: &egui::Context) {
+        let Some(path) = self.project.recovery_path() else {
+            return;
+        };
+        let theme = self.theme.clone();
+        let mut keputusan: Option<bool> = None;
+        egui::Modal::new(egui::Id::new("pemulihan-autosave")).show(ctx, |ui| {
+            ui.set_width(420.0);
+            ui.colored_label(theme.warning, "Perubahan terakhir belum tersimpan.");
+            ui.add_space(theme::spacing::GAP_CONTROL);
+            ui.label(format!(
+                "Autosave lebih baru dari proyek terakhir. Pulihkan isi {} sebagai \
+                 proyek sesi ini, atau buang autosave dan mulai dari kosong?",
+                path.file_name().unwrap_or_default().to_string_lossy()
+            ));
+            ui.add_space(theme::spacing::LIST);
+            ui.horizontal(|ui| {
+                if ui.button("Pulihkan").clicked() {
+                    keputusan = Some(true);
+                }
+                if ui.button("Buang autosave").clicked() {
+                    keputusan = Some(false);
+                }
+            });
+        });
+        match keputusan {
+            Some(true) => self.accept_recovery(&path),
+            Some(false) => self.decline_recovery(&path),
+            None => {} // menunggu pilihan pengguna
+        }
+    }
+
+    /// Terima pemulihan (§13.2): isi autosave dimuat menjadi sesi berjalan;
+    /// file tetap ada (akan ditimpa autosave berikutnya). Bila file tak
+    /// terbaca, ia dibuang agar startup berikutnya tak menawarkan rusaknya
+    /// berulang.
+    fn accept_recovery(&mut self, path: &Path) {
+        self.project.take_recovery();
+        if let Err(pesan) = self.open_flip(path, None) {
+            log::error!("pemulihan autosave gagal: {pesan}");
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    /// Tolak pemulihan (§13.2): autosave dibuang, sesi mulai kosong.
+    fn decline_recovery(&mut self, path: &Path) {
+        self.project.take_recovery();
+        let _ = std::fs::remove_file(path);
     }
 
     /// Shortcut desktop §12.2: tool `B/E/G/I`, undo `Ctrl+Z`, redo
@@ -382,6 +522,8 @@ mod tests {
     }
 
     /// Aplikasi uji (state langsung — `new()` butuh `CreationContext`).
+    /// Direktori autosave = folder temp unik & debounce panjang (tes yang
+    /// butuh autosave memanggil `set_delay` sendiri).
     fn test_app() -> FlipbrushApp {
         let theme = Theme::dark();
         let ink = theme.text_primary;
@@ -400,7 +542,19 @@ mod tests {
             anim: Animation::new(DEFAULT_CANVAS, DEFAULT_CANVAS),
             timeline: Timeline::default(),
             canvas: Canvas::new(DEFAULT_CANVAS, DEFAULT_CANVAS),
+            project: project::State::new(temp_dir("app"), std::time::Duration::from_secs(3600)),
         }
+    }
+
+    /// Folder temp unik per pemanggilan — tes tak boleh menyentuh `~/.local`.
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static N: AtomicU32 = AtomicU32::new(0);
+        std::env::temp_dir().join(format!(
+            "flipbrush-{tag}-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ))
     }
 
     /// Jalankan satu frame; buang texture delta (lihat tes M1).
@@ -1169,5 +1323,240 @@ mod tests {
         click(&mut app, &ctx, onion_btn());
         assert!(app.timeline.onion);
         assert!(app.canvas.has_onion(), "toggle menyalakan kembali");
+    }
+
+    // ------------------------------------------------------------------
+    // `.flip` + autosave + pemulihan (§13.2)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn autosave_debounce_menulis_snapshot_cel_buffer() {
+        let mut app = test_app();
+        let ctx = test_ctx();
+        frame(&mut app, &ctx, vec![]);
+
+        // Gambar satu stroke — cel frame 0 berada di buffer kanvas.
+        let dari = screen_of(&app, Vec2::new(300.0, 300.0));
+        let ke = screen_of(&app, Vec2::new(360.0, 320.0));
+        stroke(&mut app, &ctx, dari, ke);
+        assert!(app.canvas.active_cel().is_some(), "cel di buffer");
+
+        // Debounce terpenuhi → snapshot di-flush (buffer → model) + dikirim
+        // ke thread background; jadwal kosong sampai perubahan berikutnya.
+        app.project.set_delay(std::time::Duration::ZERO);
+        frame(&mut app, &ctx, vec![]);
+        assert!(!app.project.autosave_due(), "jadwal kosong setelah kirim");
+
+        // Ack FIFO setelah job autosave tuntas — isi file = snapshot tick.
+        let target = app.project.autosave_file();
+        app.project.autosave_wait();
+        assert!(target.exists(), "autosave tertulis §13.2");
+
+        // Isinya utuh: stroke yang masih di buffer IKUT ter-encode.
+        let isi = flipbrush_core::flip::decode(&std::fs::read(&target).expect("baca"))
+            .expect("autosave valid");
+        assert_eq!(isi.anim.stored_cel_count(), 1, "cel buffer ikut tersimpan");
+        let cel = isi
+            .anim
+            .layer_id(0)
+            .and_then(|l| isi.anim.cel_id_at(l, 0))
+            .expect("cel frame 0");
+        let raster = isi.anim.cel(cel).expect("raster di autosave");
+        assert!(
+            raster.pixel(330, 310).is_some_and(|p| p.a > 0),
+            "piksel stroke ikut tersimpan"
+        );
+
+        // Flush tak mengganggu kanvas: cel masih aktif & riwayat utuh.
+        assert!(app.canvas.active_cel().is_some(), "buffer utuh");
+        assert!(app.canvas.history.can_undo(), "riwayat utuh");
+    }
+
+    #[test]
+    fn autosave_tunggu_debounce_tanpa_tulisan_dini() {
+        // test_app memakai delay 3600 dtk — autosave tak pernah jalan dulu.
+        let mut app = test_app();
+        let ctx = test_ctx();
+        frame(&mut app, &ctx, vec![]);
+        let dari = screen_of(&app, Vec2::new(200.0, 200.0));
+        let ke = screen_of(&app, Vec2::new(260.0, 220.0));
+        stroke(&mut app, &ctx, dari, ke);
+
+        frame(&mut app, &ctx, vec![]);
+        assert!(
+            app.project.has_pending_change(),
+            "perubahan tercatat menunggu jadwal"
+        );
+        assert!(!app.project.autosave_due(), "masih menunggu debounce §13.2");
+        assert!(
+            !app.project.autosave_file().exists(),
+            "tak ada file sebelum jadwal"
+        );
+    }
+
+    #[test]
+    fn simpan_manual_menghapus_autosave_dan_buffer_selamat() {
+        let mut app = test_app();
+        let ctx = test_ctx();
+        frame(&mut app, &ctx, vec![]);
+        let dari = screen_of(&app, Vec2::new(200.0, 200.0));
+        let ke = screen_of(&app, Vec2::new(260.0, 220.0));
+        stroke(&mut app, &ctx, dari, ke);
+        let cel_sebelum = app.canvas.active_cel().expect("cel di buffer");
+
+        // Autosave terkirim (job bisa masih antri) lalu simpan manual —
+        // penghapusan harus menunggu antrian (FIFO §13.2).
+        app.project.set_delay(std::time::Duration::ZERO);
+        frame(&mut app, &ctx, vec![]);
+        let autosave = app.project.autosave_file();
+
+        let out = temp_dir("simpan").join("proyek.flip");
+        app.save_to(&out).expect("simpan sukses");
+
+        assert!(out.exists(), "file .flip utama ada");
+        assert!(
+            !autosave.exists(),
+            "autosave hilang setelah simpan manual sukses §13.2"
+        );
+        assert!(
+            !out.with_extension("tmp").exists(),
+            "tulis aman — tanpa .tmp"
+        );
+        assert_eq!(
+            app.project.path(),
+            Some(out.as_path()),
+            "file utama tercatat"
+        );
+
+        // Buffer & riwayat selamat — flush simpan tak membuang cel aktif.
+        assert_eq!(app.canvas.active_cel(), Some(cel_sebelum), "buffer utuh");
+        assert!(app.canvas.history.can_undo(), "riwayat utuh setelah flush");
+
+        // File valid dan isinya lengkap (stroke tersimpan).
+        let isi = flipbrush_core::flip::decode(&std::fs::read(&out).expect("baca"))
+            .expect("file utama valid");
+        assert_eq!(isi.anim.width, DEFAULT_CANVAS);
+        let cel = isi
+            .anim
+            .layer_id(0)
+            .and_then(|l| isi.anim.cel_id_at(l, 0))
+            .expect("cel frame 0");
+        assert!(
+            isi.anim
+                .cel(cel)
+                .expect("raster")
+                .pixel(230, 210)
+                .is_some_and(|p| p.a > 0),
+            "isi stroke ikut tersimpan"
+        );
+
+        let _ = std::fs::remove_dir_all(out.parent().expect("folder uji"));
+    }
+
+    #[test]
+    fn buka_file_mengembalikan_model_dan_reset_timeline() {
+        let mut app = test_app();
+        let ctx = test_ctx();
+        frame(&mut app, &ctx, vec![]);
+        let dari = screen_of(&app, Vec2::new(200.0, 200.0));
+        let ke = screen_of(&app, Vec2::new(260.0, 220.0));
+        stroke(&mut app, &ctx, dari, ke);
+        let created = app.project.created_unix();
+        let out = temp_dir("buka").join("proyek.flip");
+        app.save_to(&out).expect("simpan");
+
+        // Ubah sesi: pindah ke frame 1 + gambar (berbeda dari file).
+        click(&mut app, &ctx, cell_pos(1, 0));
+        assert_eq!(app.timeline.frame, 1);
+        let dari2 = screen_of(&app, Vec2::new(400.0, 400.0));
+        let ke2 = screen_of(&app, Vec2::new(440.0, 420.0));
+        stroke(&mut app, &ctx, dari2, ke2);
+
+        // Buka ulang → model & timeline persis seperti di file.
+        app.load_from(&out).expect("buka sukses");
+        assert_eq!(app.anim.width, DEFAULT_CANVAS);
+        assert_eq!(app.timeline.frame, 0, "playhead reset");
+        assert_eq!(app.timeline.layer, 0, "layer aktif reset");
+        assert_eq!(app.canvas.active_cel(), None, "buffer baru — muat nanti");
+        assert_eq!(
+            app.project.created_unix(),
+            created,
+            "created manifest dipertahankan lintas simpan/buka"
+        );
+        assert_eq!(app.project.path(), Some(out.as_path()));
+
+        let layer = app.anim.layer_id(0).expect("layer 0");
+        let cel0 = app.anim.cel_id_at(layer, 0).expect("cel frame 0 di file");
+        assert!(
+            app.anim
+                .cel(cel0)
+                .expect("raster")
+                .pixel(230, 210)
+                .is_some_and(|p| p.a > 0),
+            "isi stroke balik dari file"
+        );
+
+        // Frame berikutnya kanvas memuat cel sendiri (switch_cel otomatis).
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(app.canvas.active_cel(), Some(cel0), "cel dimuat kembali");
+
+        let _ = std::fs::remove_dir_all(out.parent().expect("folder uji"));
+    }
+
+    #[test]
+    fn dialog_pemulihan_startup_pulihkan_atau_buang() {
+        use flipbrush_core::flip;
+
+        // Autosave "sesi lama": proyek 64×48 fps 7 dengan satu cel.
+        let mut lama = Animation::new(64, 48);
+        lama.fps = 7;
+        let layer = lama.layer_id(0).expect("layer default");
+        let cel = lama.expose(layer, 0).expect("expose");
+        lama.put_cel(cel, flipbrush_core::raster::Raster::new(64, 48));
+        let bytes = flip::encode(&lama, 123, 456, "tes").expect("encode");
+
+        let dir = temp_dir("pemulihan");
+        std::fs::create_dir_all(&dir).expect("folder uji");
+        let autosave = project::autosave_path(&dir);
+        std::fs::write(&autosave, &bytes).expect("tulis autosave");
+
+        // Startup: autosave terdeteksi (tanpa file utama) → dialog menunggu.
+        let mut app = test_app();
+        app.project = project::State::new(dir.clone(), std::time::Duration::from_secs(3600));
+        assert_eq!(app.project.recovery_path(), Some(autosave.clone()));
+
+        // Frame UI: dialog digambar — state tak berubah sampai dipilih.
+        let ctx = test_ctx();
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(
+            app.project.recovery_path(),
+            Some(autosave.clone()),
+            "dialog bertahan sampai keputusan §13.2"
+        );
+        assert_eq!(app.anim.width, DEFAULT_CANVAS, "belum ada yang dimuat");
+
+        // Terima → isi autosave menggantikan sesi; created dari manifest.
+        app.accept_recovery(&autosave);
+        assert_eq!(app.project.recovery_path(), None, "dialog selesai");
+        assert_eq!(app.anim.width, 64, "model autosave terpasang");
+        assert_eq!(app.anim.fps, 7, "fps ikut dari file");
+        assert_eq!(app.project.created_unix(), 123, "created manifest §13.2");
+        assert_eq!(app.project.path(), None, "sesi — bukan file utama");
+        assert!(
+            autosave.exists(),
+            "autosave tetap — akan ditimpa autosave berikutnya"
+        );
+
+        // Tolak → autosave dibuang, sesi tetap kosong.
+        std::fs::write(&autosave, &bytes).expect("autosave lagi");
+        let mut tolak = test_app();
+        tolak.project = project::State::new(dir.clone(), std::time::Duration::from_secs(3600));
+        assert_eq!(tolak.project.recovery_path(), Some(autosave.clone()));
+        tolak.decline_recovery(&autosave);
+        assert_eq!(tolak.project.recovery_path(), None);
+        assert!(!autosave.exists(), "autosave dibuang §13.2");
+        assert_eq!(tolak.anim.width, DEFAULT_CANVAS, "sesi mulai kosong");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use crate::raster::Raster;
+use crate::raster::{MAX_DIMENSION, Raster, Rect};
 
 /// ID layer yang stabil (referensi exposure — bukan indeks, agar urutan
 /// lapisan boleh berubah tanpa merusak exposure).
@@ -76,6 +76,7 @@ impl Exposure {
 }
 
 /// Proyek animasi: kanvas + daftar layer + exposure + cel (bitmap RGBA8).
+#[derive(Clone)]
 pub struct Animation {
     /// Lebar kanvas dokumen (px, ≤ 4096 §13.3 — dijaga `Raster::new`).
     pub width: u32,
@@ -290,7 +291,219 @@ impl Animation {
     pub fn stored_cel_count(&self) -> usize {
         self.cels.len()
     }
+
+    // ------------------------------------------------------------------
+    // Komposit
+    // ------------------------------------------------------------------
+
+    /// Gabungkan semua layer yang terlihat pada `frame` menjadi satu raster
+    /// RGBA8 — dari bawah ke atas, src-over per opasitas layer (`layers[0]`
+    /// paling atas). Dasar preview `.flip` (§13.2) dan ekspor M5 (§13.1).
+    /// Cel yang masih berada di buffer editing diperlakukan kosong.
+    pub fn flatten_frame(&self, frame: u32) -> Raster {
+        let mut out = Raster::new(self.width, self.height);
+        for layer in self.layers.iter().rev() {
+            if !layer.visible {
+                continue;
+            }
+            let Some(exp) = self.exposure_at(layer.id, frame) else {
+                continue;
+            };
+            let Some(cel) = self.cel(exp.cel_id) else {
+                continue;
+            };
+            composite_over(&mut out, cel, layer.opacity);
+        }
+        out
+    }
+
+    // ------------------------------------------------------------------
+    // Persistensi (`.flip` §13.2 — lihat modul [`crate::flip`])
+    // ------------------------------------------------------------------
+
+    /// Semua exposure untuk simpan/muat (urut penambahan).
+    pub fn exposures(&self) -> &[Exposure] {
+        &self.exposures
+    }
+
+    /// Cel tersimpan `(id, raster)` untuk encoding `.flip` (cel yang sedang
+    /// berada di buffer editing tidak ikut — flush dulu sebelum simpan).
+    pub fn stored_cels(&self) -> impl Iterator<Item = (CelId, &Raster)> {
+        self.cels.iter().map(|(id, raster)| (*id, raster))
+    }
+
+    /// Bangun proyek dari hasil dekode `.flip` (§13.2) — memvalidasi ukuran
+    /// kanvas (1..=4096 §13.3), fps ≥ 1, layer (≥ 1, ≤ 16, ID unik), dan
+    /// setiap exposure (layer dikenal, panjang ≥ 1, di bawah 600 frame,
+    /// tanpa tumpang-tindih per layer, raster cel = ukuran kanvas).
+    /// `next_layer`/`next_cel` dihitung ulang dari ID maksimum.
+    pub fn from_saved(
+        width: u32,
+        height: u32,
+        fps: u32,
+        layers: Vec<Layer>,
+        exposures: Vec<Exposure>,
+        cels: HashMap<CelId, Raster>,
+    ) -> Result<Self, SaveError> {
+        if !(1..=MAX_DIMENSION).contains(&width) || !(1..=MAX_DIMENSION).contains(&height) {
+            return Err(SaveError::Canvas(width, height));
+        }
+        if fps < 1 {
+            return Err(SaveError::Fps(fps));
+        }
+        if layers.is_empty() {
+            return Err(SaveError::NoLayers);
+        }
+        if layers.len() > MAX_LAYERS {
+            return Err(SaveError::TooManyLayers(layers.len()));
+        }
+        for (i, layer) in layers.iter().enumerate() {
+            if layers[..i].iter().any(|other| other.id == layer.id) {
+                // ID kembar = referensi exposure tidak lagi deterministik.
+                return Err(SaveError::DuplicateLayer(layer.id));
+            }
+        }
+        for (i, exposure) in exposures.iter().enumerate() {
+            if !layers.iter().any(|l| l.id == exposure.layer) {
+                return Err(SaveError::UnknownLayer(exposure.layer));
+            }
+            if exposure.length < 1 {
+                return Err(SaveError::Exposure(i, "panjang < 1"));
+            }
+            if exposure.end() > MAX_FRAMES {
+                return Err(SaveError::Frame(exposure.end()));
+            }
+            if let Some(other) = exposures[..i].iter().find(|other| {
+                other.layer == exposure.layer
+                    && other.start < exposure.end()
+                    && exposure.start < other.end()
+            }) {
+                return Err(SaveError::Overlap(exposure.layer, other.start));
+            }
+        }
+        for (id, raster) in &cels {
+            if raster.width != width || raster.height != height {
+                return Err(SaveError::CelSize(*id, raster.width, raster.height));
+            }
+        }
+        let next_layer = layers.iter().map(|l| l.id).max().unwrap_or(0) + 1;
+        let next_cel = exposures
+            .iter()
+            .map(|e| e.cel_id)
+            .chain(cels.keys().copied())
+            .max()
+            .unwrap_or(0)
+            + 1;
+        Ok(Self {
+            width,
+            height,
+            fps,
+            layers,
+            exposures,
+            cels,
+            next_layer,
+            next_cel,
+        })
+    }
 }
+
+/// Src-over `src` di atas `out` dengan opasitas layer `opacity` (0..=1) —
+/// piksel RGBA8 tak-terali dihitung dalam 0..=255 per kanal. Area dilindungi
+/// ukuran terkecil kedua raster (model tidak mewajibkan raster cel seukuran
+/// kanvas di luar loader `.flip`).
+fn composite_over(out: &mut Raster, src: &Raster, opacity: f32) {
+    let op = (opacity.clamp(0.0, 1.0) * 255.0).round() as u32;
+    if op == 0 {
+        return;
+    }
+    let w = src.width.min(out.width);
+    let h = src.height.min(out.height);
+    if w == 0 || h == 0 {
+        return;
+    }
+    let rect = Rect { x: 0, y: 0, w, h };
+    let mut dst_buf = out.region(rect);
+    let src_buf = src.region(rect);
+    for (d, s) in dst_buf
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(src_buf.as_chunks::<4>().0)
+    {
+        let sa = (u32::from(s[3]) * op) / 255;
+        if sa == 0 {
+            continue;
+        }
+        if sa == 255 {
+            *d = *s;
+            continue;
+        }
+        let inv = 255 - sa;
+        let da = u32::from(d[3]);
+        let merged = sa + (da * inv) / 255;
+        if merged == 0 {
+            *d = [0, 0, 0, 0];
+            continue;
+        }
+        for c in 0..3 {
+            let top = u32::from(s[c]) * sa + (u32::from(d[c]) * da * inv) / 255;
+            d[c] = ((top + merged / 2) / merged) as u8;
+        }
+        d[3] = merged as u8;
+    }
+    out.write_region(rect, &dst_buf);
+}
+
+/// Alasan proyek tersimpan (`.flip`) ditolak saat dimuat — pesan jelas
+/// sesuai §13.2/§13.3.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SaveError {
+    /// Ukuran kanvas di luar 1..=4096 px.
+    Canvas(u32, u32),
+    /// fps < 1.
+    Fps(u32),
+    /// Proyek tanpa layer.
+    NoLayers,
+    /// Jumlah layer melebihi [`MAX_LAYERS`].
+    TooManyLayers(usize),
+    /// ID layer kembar.
+    DuplicateLayer(LayerId),
+    /// Exposure tidak sah pada indeks (alasan singkat).
+    Exposure(usize, &'static str),
+    /// Exposure menunjuk layer yang tidak dikenal.
+    UnknownLayer(LayerId),
+    /// Exposure melewati batas [`MAX_FRAMES`] — angka = ujung (eksklusif).
+    Frame(u32),
+    /// Dua exposure satu layer tumpang-tindih — angka = `start` yang pertama.
+    Overlap(LayerId, u32),
+    /// Raster cel tidak seukuran kanvas — (id, lebar, tinggi raster).
+    CelSize(CelId, u32, u32),
+}
+
+impl std::fmt::Display for SaveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Canvas(w, h) => write!(
+                f,
+                "ukuran kanvas {w}×{h} di luar batas 1–{MAX_DIMENSION} px (§13.3)"
+            ),
+            Self::Fps(fps) => write!(f, "fps {fps} tidak sah (minimal 1)"),
+            Self::NoLayers => write!(f, "proyek tanpa layer"),
+            Self::TooManyLayers(n) => write!(f, "{n} layer melebihi batas {MAX_LAYERS} (§13.3)"),
+            Self::DuplicateLayer(id) => write!(f, "ID layer kembar: {id}"),
+            Self::Exposure(i, alasan) => write!(f, "exposure #{i} tidak sah: {alasan}"),
+            Self::UnknownLayer(id) => write!(f, "exposure menunjuk layer tak dikenal: {id}"),
+            Self::Frame(end) => write!(f, "exposure melewati batas {MAX_FRAMES} frame: {end}"),
+            Self::Overlap(layer, start) => write!(
+                f,
+                "exposure tumpang-tindih di layer {layer} (mulai frame {start})"
+            ),
+            Self::CelSize(id, w, h) => write!(f, "cel {id} berukuran {w}×{h}, tidak sekanvas"),
+        }
+    }
+}
+
+impl std::error::Error for SaveError {}
 
 #[cfg(test)]
 mod tests {
@@ -430,5 +643,224 @@ mod tests {
         assert_eq!(anim.cel_id_at(layer, 1), Some(a));
         assert_eq!(anim.cel_id_at(layer, 2), Some(a));
         assert_eq!(anim.cel_id_at(layer, 3), Some(b), "cel B utuh");
+    }
+
+    // ------------------------------------------------------------------
+    // Persistensi (`.flip` §13.2)
+    // ------------------------------------------------------------------
+
+    /// Layer sah untuk tes `from_saved`.
+    fn layer(id: LayerId, name: &str) -> Layer {
+        Layer {
+            id,
+            name: name.to_owned(),
+            visible: true,
+            opacity: 1.0,
+            blend: Blend::default(),
+        }
+    }
+
+    #[test]
+    fn from_saved_valid_menghitung_ulang_id_berikutnya() {
+        let layers = vec![layer(3, "Atas"), layer(1, DEFAULT_LAYER_NAME)];
+        let exposures = vec![
+            Exposure {
+                layer: 1,
+                start: 0,
+                length: 3,
+                cel_id: 7,
+            },
+            Exposure {
+                layer: 3,
+                start: 2,
+                length: 1,
+                cel_id: 9,
+            },
+        ];
+        let mut cels = HashMap::new();
+        cels.insert(9, Raster::new(8, 8));
+
+        let mut anim = Animation::from_saved(8, 8, 24, layers, exposures, cels).expect("valid");
+        assert_eq!(anim.fps, 24);
+        assert_eq!(anim.frames(), 3);
+        assert_eq!(anim.layer_id(0), Some(3), "urutan Z dipertahankan");
+        assert_eq!(
+            anim.cel_id_at(1, 1),
+            Some(7),
+            "exposure berbagi cel di seluruh rentang"
+        );
+        // ID berikutnya = maksimum + 1 (referensi lama tidak dipakai ulang).
+        assert_eq!(anim.add_layer("Baru").unwrap(), 4);
+        assert_eq!(anim.expose(1, 10), Some(10));
+    }
+
+    #[test]
+    fn from_saved_menolak_input_tidak_sah() {
+        let one_layer = || vec![layer(1, DEFAULT_LAYER_NAME)];
+        let one_exposure = || {
+            vec![Exposure {
+                layer: 1,
+                start: 0,
+                length: 1,
+                cel_id: 1,
+            }]
+        };
+        let err = |r: Result<Animation, SaveError>| r.err();
+
+        assert_eq!(
+            err(Animation::from_saved(
+                0,
+                8,
+                12,
+                one_layer(),
+                vec![],
+                HashMap::new()
+            )),
+            Some(SaveError::Canvas(0, 8)),
+            "kanvas minimal 1 px"
+        );
+        assert_eq!(
+            err(Animation::from_saved(
+                8,
+                8,
+                0,
+                one_layer(),
+                vec![],
+                HashMap::new()
+            )),
+            Some(SaveError::Fps(0)),
+            "fps minimal 1"
+        );
+        assert_eq!(
+            err(Animation::from_saved(
+                8,
+                8,
+                12,
+                vec![],
+                vec![],
+                HashMap::new()
+            )),
+            Some(SaveError::NoLayers),
+            "proyek wajib punya layer"
+        );
+        let too_many = (0..MAX_LAYERS + 1).map(|i| layer(i as u32, &format!("L{i}")));
+        assert_eq!(
+            err(Animation::from_saved(
+                8,
+                8,
+                12,
+                too_many.collect(),
+                vec![],
+                HashMap::new()
+            )),
+            Some(SaveError::TooManyLayers(MAX_LAYERS + 1)),
+            "batas 16 layer §13.3"
+        );
+        assert_eq!(
+            err(Animation::from_saved(
+                8,
+                8,
+                12,
+                vec![layer(1, "a"), layer(1, "b")],
+                vec![],
+                HashMap::new()
+            )),
+            Some(SaveError::DuplicateLayer(1)),
+            "ID layer unik"
+        );
+        assert!(
+            Animation::from_saved(8, 8, 12, one_layer(), one_exposure(), HashMap::new()).is_ok(),
+            "cel tanpa raster = cel kosong, sah"
+        );
+        assert_eq!(
+            err(Animation::from_saved(
+                8,
+                8,
+                12,
+                one_layer(),
+                vec![Exposure {
+                    layer: 99,
+                    start: 0,
+                    length: 1,
+                    cel_id: 1
+                }],
+                HashMap::new()
+            )),
+            Some(SaveError::UnknownLayer(99)),
+            "referensi layer harus ada"
+        );
+        assert_eq!(
+            err(Animation::from_saved(
+                8,
+                8,
+                12,
+                one_layer(),
+                vec![Exposure {
+                    layer: 1,
+                    start: 0,
+                    length: 0,
+                    cel_id: 1
+                }],
+                HashMap::new()
+            )),
+            Some(SaveError::Exposure(0, "panjang < 1")),
+            "panjang exposure ≥ 1"
+        );
+        assert_eq!(
+            err(Animation::from_saved(
+                8,
+                8,
+                12,
+                one_layer(),
+                vec![Exposure {
+                    layer: 1,
+                    start: MAX_FRAMES - 1,
+                    length: 2,
+                    cel_id: 1
+                }],
+                HashMap::new()
+            )),
+            Some(SaveError::Frame(MAX_FRAMES + 1)),
+            "batas 600 frame §13.3"
+        );
+        assert_eq!(
+            err(Animation::from_saved(
+                8,
+                8,
+                12,
+                one_layer(),
+                vec![
+                    Exposure {
+                        layer: 1,
+                        start: 0,
+                        length: 4,
+                        cel_id: 1
+                    },
+                    Exposure {
+                        layer: 1,
+                        start: 3,
+                        length: 1,
+                        cel_id: 2
+                    },
+                ],
+                HashMap::new()
+            )),
+            Some(SaveError::Overlap(1, 0)),
+            "exposure satu layer tidak boleh tumpang-tindih"
+        );
+        let mut wrong_size = HashMap::new();
+        wrong_size.insert(1, Raster::new(4, 4));
+        assert_eq!(
+            err(Animation::from_saved(
+                8,
+                8,
+                12,
+                one_layer(),
+                vec![],
+                wrong_size
+            )),
+            Some(SaveError::CelSize(1, 4, 4)),
+            "raster cel harus seukuran kanvas"
+        );
     }
 }

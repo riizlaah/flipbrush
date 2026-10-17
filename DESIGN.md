@@ -473,8 +473,8 @@ CI menjalankan `clippy`, `rustfmt`, test, dan test dilarangnya hex literal di lu
   area-kotor 50 langkah); ✔ rail §7.4 + options bar §7.5 + HUD koordinat/zoom;
   ✔ mode fokus `Tab` (§8.2).
 
-**M3 — Model animasi** *(bertahap: tahap 1 model+timeline ✔, tahap 2 playback
-+onion ✔, tahap 3 `.flip`+autosave)*
+**M3 — Model animasi** *(✔ bertahap: tahap 1 model+timeline, tahap 2
+playback+onion, tahap 3 `.flip`+autosave)*
 
 - ✔ (tahap 1) Model frame/layer/exposure (core `anim`); timeline dock (grid
   X-sheet: baris = layer, kolom = frame, state cell §7.7) + playhead +
@@ -485,7 +485,14 @@ CI menjalankan `clippy`, `rustfmt`, test, dan test dilarangnya hex literal di lu
   skin (§2.3: siluet prev merah / next biru aman buta warna di atas light
   table putih 8%, di bawah kanvas aktif) dengan play/pause & toggle onion di
   transport (§8.2).
-- Format `.flip` + autosave/recovery (lihat §13.2).
+- ✔ (tahap 3) Format `.flip` + autosave/recovery (lihat §13.2): container ZIP
+  `manifest.json` + `cels/<id>.png` per cel unik + preview ≤ 256 px +
+  `checksums.txt` (SHA-256 format `sha256sum`); tolak `format_version` lebih
+  tinggi & abaikan field tak dikenal; tulis aman `*.tmp` → rename atomik;
+  autosave di thread background **30 detik setelah perubahan terakhir**
+  (dibangunkan via `request_repaint_after` — tetap jalan walau UI diam);
+  dialog pemulihan startup (token `warning` §2.2) — verifikasi e2e
+  `kill -9` → relaunch → pulih.
 - **Selesai**: loop stabil, recover setelah kill proses, zoom timeline
   `Ctrl+Scroll`.
 

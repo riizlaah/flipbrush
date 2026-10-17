@@ -1,11 +1,14 @@
 //! Model domain Flipbrush: proyek animasi, frame, layer, dan cel.
 //!
 //! Crate ini murni domain logic — tanpa UI (egui) dan tanpa I/O platform.
-//! Milestone pengisian: M2 (inti stroke — [`raster`]), M3 (model animasi,
-//! lihat DESIGN.md §12.2).
+//! Milestone pengisian: M2 (inti stroke — [`raster`]), M3 (model animasi +
+//! format `.flip` lihat DESIGN.md §12.2, §13.2).
 
 /// Model animasi M3: layer, frame, cel, exposure (DESIGN.md §12.2, §7.7).
 pub mod anim;
+
+/// Format `.flip` M3: encode/decode container ZIP in-memory (DESIGN.md §13.2).
+pub mod flip;
 
 /// Inti stroke M2: bitmap RGBA8, kuas, penghapus, fill, undo/redo.
 pub mod raster;
