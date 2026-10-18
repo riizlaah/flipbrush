@@ -585,6 +585,19 @@ M5/M6)*
   efek, klik-panjang tetap eyedropper — e2e: `X` drag seleksi terisi →
   isi pindah + undo memulihkan; `U` drag → kotak/elips terisi warna
   aktif, tepi halus.
+- *(M4d tahap 4 selesai)* teks satu baris (`Raster::teks` via
+  `ab_glyph`): Tool Text (`T`, bersama tool gambar) — nilai teks
+  (`TextEdit`) + slider Ukuran di options bar §7.5; klik kanvas
+  memasang teks di kiri-atas titik klik (baseline = klik.y + ascent;
+  layout caret per advance, tanpa kerning v1) — tepi glyph anti-alias
+  coverage per piksel, src-over identik tempa, satu entri undo (bbox
+  advance × tinggi baris); pratinjau teks semi-transparan mengikuti
+  pointer; font dokumen: sistem umum (DejaVu/Liberation/Noto) →
+  fallback font embedded egui (selalu ada di biner, deterministik
+  untuk tes); I/O pemuatan font di app (core tetap tanpa I/O) — e2e:
+  `T` → ketik teks di options bar → klik kanvas → teks muncul,
+  `Ctrl+Z` bersih; klik tanpa teks = tanpa efek, klik-panjang tetap
+  eyedropper.
 - Tool rail 48 px §7.4; options bar 40 px §7.5; dock 280 px + timeline dock 200 px,
   resize & persist per proyek §8.2; command palette `Ctrl+K` §7.10; hover, shortcut
   penuh, dense (§1.5); `Tab` mode fokus; HiDPI logical px.

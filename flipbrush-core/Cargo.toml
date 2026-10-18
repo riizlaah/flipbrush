@@ -8,6 +8,9 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+# M4d tahap 4: `Raster::teks` — parse & rasterisasi glyph murni
+# komputasi (crate ini tetap tanpa I/O).
+ab_glyph.workspace = true
 png.workspace = true
 serde.workspace = true
 serde_json.workspace = true

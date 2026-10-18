@@ -10,6 +10,8 @@
 
 use std::collections::VecDeque;
 
+use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
+
 use crate::seleksi::Seleksi;
 
 /// Batas ukuran kanvas v1 (DESIGN §13.3): di atas ini proyek ditolak
@@ -563,6 +565,103 @@ impl Raster {
                     self.pixels[i + 3] = (out_a * 255.0).round() as u8;
                 }
             }
+        }
+        Some(FillResult { rect: area, before })
+    }
+
+    /// Rasterisasi teks satu baris — tool Text (M4d tahap 4, §12.2).
+    /// `font` = byte file `.ttf`/`.otf` (gagal parse → `None`; I/O
+    /// pemilihan font tetap di app, agar crate ini tanpa I/O). Klik =
+    /// kiri-atas blok teks (baseline `pos.1 + ascent`, sehingga puncak
+    /// huruf tepat di `pos.1`). Tepi glyph anti-alias coverage per piksel
+    /// dari `ab_glyph`; pewarnaan src-over identik [`Self::stamp`].
+    /// Area kotor = bbox layout (advance + tinggi baris) terpotong kanvas.
+    pub fn teks(
+        &mut self,
+        font: &[u8],
+        teks: &str,
+        pos: (f32, f32),
+        size: f32,
+        color: Rgba,
+        opacity: f32,
+    ) -> Option<FillResult> {
+        if teks.is_empty() || size <= 0.0 {
+            return None;
+        }
+        let opacity = opacity.clamp(0.0, 1.0);
+        if opacity <= 0.0 {
+            return None;
+        }
+        let font = FontRef::try_from_slice(font).ok()?;
+
+        // Layout satu baris: caret maju per advance glyph (tanpa kerning
+        // v1); baseline = pos.1 + ascent → puncak huruf di pos.1.
+        let scale = PxScale::from(size);
+        let scaled = font.as_scaled(scale);
+        let baseline = pos.1 + scaled.ascent();
+        let mut glyphs = Vec::with_capacity(teks.chars().count());
+        let mut caret = pos.0;
+        for c in teks.chars() {
+            let mut glyph = scaled.scaled_glyph(c);
+            glyph.position = ab_glyph::Point {
+                x: caret,
+                y: baseline,
+            };
+            caret += scaled.h_advance(glyph.id);
+            glyphs.push(glyph);
+        }
+
+        // Bbox layout (advance × tinggi baris) → capture undo & clip.
+        let area = Rect::from_points(
+            pos.0.floor() as i32,
+            pos.1.floor() as i32,
+            caret.ceil() as i32,
+            (pos.1 + scaled.height()).ceil() as i32,
+        )
+        .intersect(self.bounds());
+        if area.is_empty() {
+            return None;
+        }
+        let before = RegionBuf::capture(self, area);
+
+        for glyph in glyphs {
+            // Spasi/glyph tanpa outline → tanpa piksel.
+            let Some(outlined) = font.outline_glyph(glyph) else {
+                continue;
+            };
+            // `px_bounds.min` integer-valued (floor/ceil ab_glyph) —
+            // koordinat draw relatif ke sana.
+            let pb = outlined.px_bounds();
+            outlined.draw(|gx, gy, coverage| {
+                let alpha = coverage * opacity;
+                if alpha <= ALPHA_EPSILON {
+                    return;
+                }
+                let x = pb.min.x as i32 + gx as i32;
+                let y = pb.min.y as i32 + gy as i32;
+                if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
+                    return;
+                }
+                let i = ((y as u32 * self.width + x as u32) * 4) as usize;
+                let sa = alpha * (f32::from(color.a) / 255.0);
+                let da = f32::from(self.pixels[i + 3]) / 255.0;
+                let out_a = sa + da * (1.0 - sa);
+                if out_a <= ALPHA_EPSILON {
+                    self.pixels[i] = color.r;
+                    self.pixels[i + 1] = color.g;
+                    self.pixels[i + 2] = color.b;
+                    self.pixels[i + 3] = 0;
+                    return;
+                }
+                let blend = |s: u8, d: u8| -> u8 {
+                    let v = (f32::from(s) * sa + f32::from(d) * da * (1.0 - sa)) / out_a;
+                    v.round().clamp(0.0, 255.0) as u8
+                };
+                self.pixels[i] = blend(color.r, self.pixels[i]);
+                self.pixels[i + 1] = blend(color.g, self.pixels[i + 1]);
+                self.pixels[i + 2] = blend(color.b, self.pixels[i + 2]);
+                self.pixels[i + 3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
+            });
         }
         Some(FillResult { rect: area, before })
     }
@@ -1307,6 +1406,29 @@ mod tests {
                 .is_none(),
             "opacity 0 = tanpa perubahan"
         );
+    }
+
+    #[test]
+    fn teks_tolak_input_tanpa_render() {
+        let mut r = Raster::new(32, 32);
+        assert!(
+            r.teks(&[], "", (0.0, 0.0), 20.0, ink(), 1.0).is_none(),
+            "teks kosong tak menggambar"
+        );
+        assert!(
+            r.teks(&[], "Halo", (0.0, 0.0), 0.0, ink(), 1.0).is_none(),
+            "ukuran 0 ditolak"
+        );
+        assert!(
+            r.teks(&[], "Halo", (0.0, 0.0), 20.0, ink(), 0.0).is_none(),
+            "opasitas 0 ditolak"
+        );
+        assert!(
+            r.teks(b"bukan-font", "Halo", (0.0, 0.0), 20.0, ink(), 1.0)
+                .is_none(),
+            "byte font tak valid gagal parse"
+        );
+        assert_eq!(r.pixel(0, 0).unwrap().a, 0, "tak ada efek samping");
     }
 
     // Kecil: akses piksel snapshot untuk asersi di atas.

@@ -11,13 +11,18 @@
 //! - **Klik-panjang** = eyedropper (§12.2) di tool mana pun.
 //! - **Seleksi** (M4d): marquee (drag kotak), lasso (drag poligon) & wand
 //!   (klik area warna → mask flood-fill) → marching ants + highlight
-//!   ringan (§2.1); seluruh operasi gambar ter-clip area seleksi; klik
+//!   ringan (§2.1); stroke, fill & `Delete` ter-clip area seleksi; klik
 //!   polos marquee/lasso = hapus seleksi; `Delete` hapus isi (undo-able);
 //!   **Move** (M4d tahap 3): drag pindah isi seleksi — pratinjau outline
 //!   live, commit piksel + geometri sekali jadi dengan satu entri undo.
 //! - **Shape** (M4d tahap 3): drag bentuk terisi persegi/elips (toggle di
 //!   options bar) — warna aktif, opacity brush, tepi anti-alias SDF per
-//!   piksel; outline putus-putus selama drag.
+//!   piksel; outline putus-putus selama drag. Shape & teks tanpa clip
+//!   seleksi (v1 — stroke & fill yang ter-clip).
+//! - **Text** (M4d tahap 4): teks satu baris — nilai + ukuran di options
+//!   bar, klik kanvas memasang (kiri-atas, satu entri undo); rasterisasi
+//!   `ab_glyph` (font sistem → fallback embedded egui), pratinjau teks
+//!   mengikuti pointer.
 //! - **Onion skin** (§2.3, M3): frame sebelumnya merah / berikutnya biru —
 //!   aman buta warna (§9) — di atas overlay light table (putih @ 8%).
 //!
@@ -194,6 +199,14 @@ pub struct Canvas {
     /// Titik awal drag shape (koordinat dokumen — M4d tahap 3); `None`
     /// di luar drag.
     shape_start: Option<Vec2>,
+    /// Nilai teks tool Text (M4d tahap 4) — diketik di options bar,
+    /// dipasang saat klik kanvas. Transien (tak di-persist).
+    pub teks: String,
+    /// Ukuran font teks dokumen (px) — slider Ukuran di options bar.
+    pub teks_size: f32,
+    /// Byte font teks dokumen — dimuat sekali lazy (font sistem, lalu
+    /// fallback font embedded egui).
+    font_teks: Option<Vec<u8>>,
 
     stroke: Option<StrokeInProgress>,
     sampler: StrokeSampler,
@@ -201,6 +214,42 @@ pub struct Canvas {
     press: Option<Press>,
     was_down: bool,
     fitted: bool,
+}
+
+/// Path font teks dokumen yang lazim ada di desktop Linux (urut
+/// preferensi — M4d tahap 4; font dokumen bebas dari tipografi UI §3).
+const FONT_DOKUMEN: [&str; 7] = [
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/google-noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+];
+
+/// Muat byte font teks dokumen: font sistem dulu (pilihan desktop),
+/// fallback font embedded egui (`FontDefinitions::default` — selalu ada
+/// di biner, deterministik untuk tes headless). Hasilnya di-cache di
+/// [`Canvas`] (`font_teks`) — dipanggil sekali lazy saat klik pertama.
+fn muat_font_teks() -> Option<Vec<u8>> {
+    for path in FONT_DOKUMEN {
+        if let Ok(b) = std::fs::read(path) {
+            return Some(b);
+        }
+    }
+    let defs = egui::FontDefinitions::default();
+    // "Ubuntu-Light" proporsional dulu — iterasi BTreeMap polos bisa
+    // jatuh ke "Hack" (monospace) yang kurang pantas untuk teks dokumen.
+    for nama in ["Ubuntu-Light", "Hack"] {
+        if let Some(data) = defs.font_data.get(nama) {
+            return Some(data.font.as_ref().to_vec());
+        }
+    }
+    defs.font_data
+        .values()
+        .next()
+        .map(|d| d.font.as_ref().to_vec())
 }
 
 impl Canvas {
@@ -225,6 +274,9 @@ impl Canvas {
             sel_preview: None,
             move_awal: None,
             shape_start: None,
+            teks: String::new(),
+            teks_size: 48.0,
+            font_teks: None,
             stroke: None,
             sampler: StrokeSampler::default(),
             last_doc: None,
@@ -681,6 +733,38 @@ impl Canvas {
             self.selection = Seleksi::dari_wand(&self.raster, gx, gy, tolerance);
         }
 
+        // (6c) Text (M4d tahap 4): klik memasang teks di titik klik
+        // (kiri-atas) — satu entri undo. Klik-panjang tetap eyedropper;
+        // klik polos / teks kosong / font tak tersedia = tanpa efek.
+        // Shape & teks sengaja tanpa clip seleksi (konsisten Aseprite —
+        // v1; stroke & fill yang ter-clip).
+        if response.clicked()
+            && tool == Tool::Text
+            && self.press.as_ref().is_some_and(|p| !p.long)
+            && !self.teks.is_empty()
+            && let Some(pd) = pointer_doc
+        {
+            if self.font_teks.is_none() {
+                self.font_teks = muat_font_teks();
+            }
+            if let Some(font) = self.font_teks.as_ref()
+                && let Some(result) = self.raster.teks(
+                    font,
+                    &self.teks,
+                    (pd.x, pd.y),
+                    self.teks_size,
+                    *color,
+                    brush.opacity,
+                )
+            {
+                let after = self.raster.region(result.rect);
+                if result.before.data != after {
+                    self.history.push(result.rect, result.before.data, after);
+                }
+                new_dirty = new_dirty.union(result.rect);
+            }
+        }
+
         // (7) Rilis: commit stroke, seleksi, atau pindahan (Move — M4d
         // tahap 3: piksel + geometri seleksi bergeser dalam satu entri undo).
         if up_now {
@@ -807,6 +891,22 @@ impl Canvas {
             None
         };
         self.gambar_preview_bentuk(painter, theme, bentuk_prev, ellipse, doc_rect);
+        // Pratinjau teks (M4d tahap 4): teks aktif mengikuti pointer di
+        // titik klik — pewarnaan dokumen baru terjadi saat klik (blok 6c).
+        // Font UI egui untuk pratinjau (kira-kira — font dokumen sistem
+        // bisa sedikit berbeda lebarnya).
+        if tool == Tool::Text
+            && !self.teks.is_empty()
+            && let Some(pd) = pointer_doc
+        {
+            painter.text(
+                self.viewport.to_screen(pd).to_pos2(),
+                egui::Align2::LEFT_TOP,
+                &self.teks,
+                egui::FontId::proportional(self.teks_size * self.viewport.zoom),
+                Color32::from_rgba_unmultiplied(color.r, color.g, color.b, 150),
+            );
+        }
         self.hud(ui, theme, area, hover);
     }
 

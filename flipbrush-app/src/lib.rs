@@ -29,7 +29,9 @@
 //! seleksi, `Delete` hapus isi seleksi; tahap 2 lasso (poligon even-odd)
 //! dan wand (mask flood-fill), overlay varian per bentuk asli; tahap 3
 //! transform Move (`geser_isi`, satu entri undo) + shape persegi/elips
-//! (`bentuk`, tepi SDF anti-alias).
+//! (`bentuk`, tepi SDF anti-alias); tahap 4 teks satu baris (`Raster::teks`
+//! via `ab_glyph` — font sistem fallback embedded egui, klik kanvas
+//! memasang di kiri-atas).
 
 pub mod canvas;
 pub mod color;
@@ -372,6 +374,20 @@ impl FlipbrushApp {
                     if elips.clicked() {
                         self.shape_ellipse = true;
                     }
+                }
+                Tool::Text => {
+                    // M4d tahap 4: nilai teks + ukuran — klik kanvas memasang.
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.canvas.teks)
+                            .desired_width(240.0)
+                            .hint_text("Teks — klik kanvas untuk memasang"),
+                    );
+                    divider(ui, &theme);
+                    let mut size = self.canvas.teks_size;
+                    slider::DragNumeric::new("Ukuran", &mut size, 8.0..=200.0, 1.0)
+                        .suffix(" px")
+                        .show(ui, &theme);
+                    self.canvas.teks_size = size;
                 }
                 Tool::Move => {
                     // M4d tahap 3: transform pindah butuh seleksi aktif.
@@ -1366,6 +1382,48 @@ mod tests {
             app.canvas.raster.pixel(330, 320).unwrap().a,
             0,
             "satu undo menghapus seluruh bentuk (klik polos tanpa entri)"
+        );
+    }
+
+    #[test]
+    fn text_klik_memasang_teks_dan_undo() {
+        let mut app = test_app();
+        let ctx = test_ctx();
+        // Pemanasan: viewport ter-fit dulu sebelum `screen_of`.
+        frame(&mut app, &ctx, vec![]);
+
+        frame(&mut app, &ctx, vec![key(egui::Key::T, Modifiers::NONE)]);
+        assert_eq!(app.tool, Tool::Text, "T memilih tool teks");
+
+        app.canvas.teks = "Halo".into();
+        app.color = Rgba::opaque(60, 120, 200);
+        let p = screen_of(&app, Vec2::new(300.0, 300.0));
+        click(&mut app, &ctx, p);
+
+        // Jumlah piksel tertutup glif di jendela sampling kiri-atas klik.
+        let tertutup = |app: &FlipbrushApp| -> usize {
+            (300..360)
+                .map(|x| {
+                    (300..360)
+                        .filter(|&y| app.canvas.raster.pixel(x, y).is_some_and(|p| p.a > 0))
+                        .count()
+                })
+                .sum()
+        };
+        let terpasang = tertutup(&app);
+        assert!(terpasang > 100, "glif teks tergambar: {terpasang} piksel");
+        assert_eq!(
+            app.canvas.raster.pixel(300, 360).unwrap().a,
+            0,
+            "di bawah baris teks tetap kosong"
+        );
+
+        // Undo — satu entri memulihkan seluruh bbox teks.
+        frame(&mut app, &ctx, vec![key(egui::Key::Z, Modifiers::CTRL)]);
+        assert_eq!(
+            tertutup(&app),
+            0,
+            "undo menghapus seluruh teks (satu entri)"
         );
     }
 

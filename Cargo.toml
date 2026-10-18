@@ -9,6 +9,10 @@ license = "MIT OR Apache-2.0"
 rust-version = "1.99"
 
 [workspace.dependencies]
+# Rasterisasi teks dokumen (M4d tahap 4, §12.2 toolset lanjutan) —
+# versi yang sama dengan epaint (transitif) agar satu biner satu build.
+ab_glyph = "0.2.32"
+
 # UI shell — egui/eframe dengan renderer wgpu (keputusan: wgpu, lihat §13.3 baseline Vulkan)
 eframe = { version = "0.36.2", default-features = false, features = [
     "android-native-activity",

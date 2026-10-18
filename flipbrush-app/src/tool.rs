@@ -38,6 +38,9 @@ pub enum Tool {
     /// Bentuk terisi persegi/elips (M4d tahap 3) — drag; warna aktif,
     /// opacity brush; toggle Persegi/Ellipse di options bar.
     Shape,
+    /// Teks satu baris (M4d tahap 4) — isi teks di options bar, klik
+    /// kanvas memasang di titik klik (kiri-atas); kontrol ukuran.
+    Text,
     /// Seleksi persegi (M4d tahap 1) — drag membentuk marching ants; klik
     /// polos menghapus seleksi.
     Marquee,
@@ -53,14 +56,15 @@ pub enum Tool {
 }
 
 impl Tool {
-    /// Urutan item di rail §7.4 — bentuk bersama tool gambar, keluarga
-    /// seleksi + move di belakang divider sendiri.
-    pub const ALL: [Tool; 9] = [
+    /// Urutan item di rail §7.4 — tool gambar bersama shape & text,
+    /// keluarga seleksi + move di belakang divider sendiri.
+    pub const ALL: [Tool; 10] = [
         Self::Brush,
         Self::Eraser,
         Self::Fill,
         Self::Eyedropper,
         Self::Shape,
+        Self::Text,
         Self::Marquee,
         Self::Lasso,
         Self::Wand,
@@ -75,6 +79,7 @@ impl Tool {
             Self::Fill => Icon::Fill,
             Self::Eyedropper => Icon::Eyedropper,
             Self::Shape => Icon::Shape,
+            Self::Text => Icon::Text,
             Self::Marquee => Icon::Marquee,
             Self::Lasso => Icon::Lasso,
             Self::Wand => Icon::Wand,
@@ -90,6 +95,7 @@ impl Tool {
             Self::Fill => "Fill",
             Self::Eyedropper => "Eyedropper",
             Self::Shape => "Shape",
+            Self::Text => "Text",
             Self::Marquee => "Marquee",
             Self::Lasso => "Lasso",
             Self::Wand => "Wand",
@@ -105,6 +111,7 @@ impl Tool {
             Self::Fill => Key::G,
             Self::Eyedropper => Key::I,
             Self::Shape => Key::U,
+            Self::Text => Key::T,
             Self::Marquee => Key::M,
             Self::Lasso => Key::L,
             Self::Wand => Key::W,
@@ -120,6 +127,7 @@ impl Tool {
             Self::Fill => "G",
             Self::Eyedropper => "I",
             Self::Shape => "U",
+            Self::Text => "T",
             Self::Marquee => "M",
             Self::Lasso => "L",
             Self::Wand => "W",
