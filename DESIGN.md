@@ -557,6 +557,20 @@ M5/M6)*
   (§7.4); palette: "Hapus area terpilih" (`Delete`) — e2e: drag marquee →
   marching ants tampil; stroke brush di luar seleksi tak mengubah piksel;
   `Delete` membersihkan isi, `Ctrl+Z` mengembalikan.
+- *(M4d tahap 2 selesai)* lasso + wand (`flipbrush-core::seleksi` — enum
+  kini non-`Copy`, varian `Poligon` & `Mask`; API masking memakai referensi
+  `Option<&Seleksi>`): Lasso (`L`) — drag poligon bebas (titik jalur baru
+  bila jarak ≥ 1 px dokumen), uji titik-in-poligon even-odd pada pusat
+  piksel, klik polos menghapus seleksi; Wand (`W`) — klik area warna →
+  resolusi flood-fill (toleransi kontrol bersama Fill) menjadi bitmask
+  bbox + baris-major sekali saat klik; overlay lasso = isi poligon
+  scanline even-odd (cekung aman, path epaint convex-only tak cukup) +
+  jalur tertutup putus-putus, wand = isi span baris mask (bentuk asli
+  region via run-length) + bbox putus-putus (outline per-piksel menyusul);
+  clipping stroke/fill/`Delete` berlaku untuk semua varian (`contains`
+  per varian) — e2e: `L` drag segitiga → highlight poligon, `Delete`
+  bersih; `W` klik blok → highlight mengikuti bentuk blok; stroke di luar
+  mask ter-clip.
 - Tool rail 48 px §7.4; options bar 40 px §7.5; dock 280 px + timeline dock 200 px,
   resize & persist per proyek §8.2; command palette `Ctrl+K` §7.10; hover, shortcut
   penuh, dense (§1.5); `Tab` mode fokus; HiDPI logical px.

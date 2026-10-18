@@ -207,7 +207,7 @@ impl Raster {
         brush: Brush,
         color: Rgba,
         erase: bool,
-        mask: Option<Seleksi>,
+        mask: Option<&Seleksi>,
     ) -> Rect {
         let opacity = brush.opacity.clamp(0.0, 1.0);
         if opacity <= 0.0 {
@@ -334,7 +334,7 @@ impl Raster {
         y: i32,
         color: Rgba,
         tolerance: u8,
-        mask: Option<Seleksi>,
+        mask: Option<&Seleksi>,
     ) -> Option<FillResult> {
         if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
             return None;
@@ -417,7 +417,7 @@ impl Raster {
     /// Hapus piksel di dalam area seleksi — shortcut `Delete` (M4d).
     /// Mengembalikan area + piksel sebelumnya untuk undo; `None` bila area
     /// seleksi di luar kanvas.
-    pub fn clear_in(&mut self, sel: Seleksi) -> Option<FillResult> {
+    pub fn clear_in(&mut self, sel: &Seleksi) -> Option<FillResult> {
         let rect = sel.rect().intersect(self.bounds());
         if rect.is_empty() {
             return None;
@@ -460,7 +460,7 @@ impl StrokeSampler {
         brush: Brush,
         color: Rgba,
         erase: bool,
-        mask: Option<Seleksi>,
+        mask: Option<&Seleksi>,
     ) -> Rect {
         self.carry = 0.0;
         raster.stamp_masked(point, brush, color, erase, mask)
@@ -476,7 +476,7 @@ impl StrokeSampler {
         brush: Brush,
         color: Rgba,
         erase: bool,
-        mask: Option<Seleksi>,
+        mask: Option<&Seleksi>,
     ) -> Rect {
         let (dx, dy) = (to.0 - from.0, to.1 - from.1);
         let dist = (dx * dx + dy * dy).sqrt();
@@ -972,7 +972,7 @@ mod tests {
             w: 4,
             h: 4,
         });
-        let rect = r.stamp_masked((6.0, 6.0), brush, ink(), false, Some(sel));
+        let rect = r.stamp_masked((6.0, 6.0), brush, ink(), false, Some(&sel));
         assert!(rect.w > 0 && rect.h > 0, "ada area kotor");
         assert!(r.pixel(6, 6).unwrap().a > 0, "inti kuas di dalam seleksi");
         // Radius 3 (+ feather): (3, 6) masih dalam jangkauan kuas TAPI di
@@ -991,7 +991,7 @@ mod tests {
             h: 1,
         });
         let hasil = r
-            .flood_fill_masked(2, 0, Rgba::opaque(255, 0, 0), 0, Some(sel))
+            .flood_fill_masked(2, 0, Rgba::opaque(255, 0, 0), 0, Some(&sel))
             .expect("benih di dalam seleksi");
         assert_eq!(r.pixel(2, 0).unwrap().r, 255, "benih terisi");
         assert_eq!(r.pixel(1, 0).unwrap().a, 0, "tetangga di luar seleksi utuh");
@@ -1018,7 +1018,7 @@ mod tests {
             h: 1,
         });
         assert!(
-            r.flood_fill_masked(0, 0, Rgba::opaque(255, 0, 0), 0, Some(sel))
+            r.flood_fill_masked(0, 0, Rgba::opaque(255, 0, 0), 0, Some(&sel))
                 .is_none(),
             "benih di luar seleksi = tanpa isi"
         );
@@ -1043,7 +1043,7 @@ mod tests {
             w: 2,
             h: 2,
         });
-        let hasil = r.clear_in(sel).expect("area seleksi di dalam kanvas");
+        let hasil = r.clear_in(&sel).expect("area seleksi di dalam kanvas");
         assert_eq!(r.pixel(1, 1).unwrap().a, 0, "dalam seleksi: transparan");
         assert!(r.pixel(3, 1).unwrap().a > 0, "luar seleksi: utuh");
         // Data "sebelum" mengembalikan isi seleksi (jalur undo).
@@ -1060,7 +1060,7 @@ mod tests {
             w: 2,
             h: 2,
         });
-        assert!(r.clear_in(sel).is_none(), "tak ada area tersentuh");
+        assert!(r.clear_in(&sel).is_none(), "tak ada area tersentuh");
     }
 
     // Kecil: akses piksel snapshot untuk asersi di atas.

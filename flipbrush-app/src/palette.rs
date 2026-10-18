@@ -421,6 +421,8 @@ mod tests {
             "Eraser",
             "Fill",
             "Marquee", // M4d: tool seleksi masuk daftar otomatis
+            "Lasso",
+            "Wand",
             "Urungkan",
             "Ulangi",
             "Mode fokus",
@@ -449,9 +451,10 @@ mod tests {
         for tool in Tool::ALL {
             p.catat_tool(tool);
         }
-        // Tak ada tool keenam — riwayat = semua tool unik terakhir.
-        assert_eq!(p.recent.len(), Tool::ALL.len());
-        assert_eq!(p.recent[0], Tool::Marquee, "terakhir dicatat = terdepan");
+        // Tool kini lebih banyak daripada batas riwayat — terpotong ke
+        // RECENT_MAX, terakhir dicatat = terdepan.
+        assert_eq!(p.recent.len(), RECENT_MAX);
+        assert_eq!(p.recent[0], Tool::Wand, "terakhir dicatat = terdepan");
     }
 
     #[test]

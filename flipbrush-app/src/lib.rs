@@ -24,9 +24,10 @@
 //! vs tab order saat widget berfokus), `Esc` keluar mode fokus, tombol ikon,
 //! tab dock, chevron, dan kotak warna punya fokus keyboard & aktivasi
 //! `Enter`/`Space` (`icon::teraktivasi`).
-//! M4d tahap 1 (§12.2): marquee + model seleksi (`canvas`, core
-//! `seleksi`) — marching ants + highlight §2.1, operasi gambar ter-clip
-//! seleksi, `Delete` hapus isi seleksi.
+//! M4d (§12.2): seleksi piksel — tahap 1 marquee (`canvas`, core
+//! `seleksi`): marching ants + highlight §2.1, operasi gambar ter-clip
+//! seleksi, `Delete` hapus isi seleksi; tahap 2 lasso (poligon even-odd)
+//! + wand (mask flood-fill), overlay varian per bentuk asli.
 
 pub mod canvas;
 pub mod color;
@@ -324,7 +325,9 @@ impl FlipbrushApp {
                         .show(ui, &theme);
                     self.brush.hardness = (hardness / 100.0).clamp(0.0, 1.0);
                 }
-                Tool::Fill => {
+                Tool::Fill | Tool::Wand => {
+                    // Wand (M4d tahap 2) memakai toleransi yang sama dengan
+                    // Fill — resolisinya memakai flood-fill yang identik.
                     let mut tolerance = self.fill_tolerance;
                     slider::DragNumeric::new("Toleransi", &mut tolerance, 0.0..=100.0, 1.0)
                         .show(ui, &theme);
@@ -342,6 +345,14 @@ impl FlipbrushApp {
                     ui.label(
                         Type::Body
                             .rich("Drag pilih area · klik hapus seleksi · Delete hapus isi")
+                            .color(theme.text_secondary),
+                    );
+                }
+                Tool::Lasso => {
+                    // M4d tahap 2: lasso tanpa kontrol — hint pemakaian saja.
+                    ui.label(
+                        Type::Body
+                            .rich("Drag poligon bebas · klik hapus seleksi · Delete hapus isi")
                             .color(theme.text_secondary),
                     );
                 }
@@ -752,6 +763,41 @@ mod tests {
         );
     }
 
+    /// Urutan drag multi-titik: tekan di titik pertama → geser melewati
+    /// titik-titik tengah → lepas di terakhir (lasso, M4d tahap 2).
+    fn drag_points(app: &mut FlipbrushApp, ctx: &egui::Context, titik: &[Pos2]) {
+        let (Some(&awal), Some(&akhir)) = (titik.first(), titik.last()) else {
+            return;
+        };
+        frame(
+            app,
+            ctx,
+            vec![
+                egui::Event::PointerMoved(awal),
+                egui::Event::PointerButton {
+                    pos: awal,
+                    button: PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Modifiers::NONE,
+                },
+            ],
+        );
+        for &p in &titik[1..titik.len() - 1] {
+            frame(app, ctx, vec![egui::Event::PointerMoved(p)]);
+        }
+        frame(app, ctx, vec![egui::Event::PointerMoved(akhir)]);
+        frame(
+            app,
+            ctx,
+            vec![egui::Event::PointerButton {
+                pos: akhir,
+                button: PointerButton::Primary,
+                pressed: false,
+                modifiers: Modifiers::NONE,
+            }],
+        );
+    }
+
     fn key(key: egui::Key, modifiers: Modifiers) -> egui::Event {
         egui::Event::Key {
             key,
@@ -1004,6 +1050,7 @@ mod tests {
         let sel = app
             .canvas
             .selection
+            .as_ref()
             .expect("drag marquee membentuk seleksi");
         let r = sel.rect();
         assert!(
@@ -1090,6 +1137,94 @@ mod tests {
             app.canvas.history.can_undo(),
             riwayat,
             "tanpa seleksi = tanpa entri riwayat baru"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // M4d tahap 2 — lasso + wand (§12.2 toolset lanjutan)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn lasso_drag_poligon_membentuk_seleksi_klik_pola_menghapus() {
+        let mut app = test_app();
+        let ctx = test_ctx();
+        // Pemanasan: viewport ter-fit dulu sebelum `screen_of`.
+        frame(&mut app, &ctx, vec![]);
+
+        frame(&mut app, &ctx, vec![key(egui::Key::L, Modifiers::NONE)]);
+        assert_eq!(app.tool, Tool::Lasso, "L memilih tool lasso");
+
+        // Segitiga dokumen (150,120)–(280,140)–(200,260).
+        let titik = [
+            screen_of(&app, Vec2::new(150.0, 120.0)),
+            screen_of(&app, Vec2::new(280.0, 140.0)),
+            screen_of(&app, Vec2::new(200.0, 260.0)),
+        ];
+        drag_points(&mut app, &ctx, &titik);
+        let sel = app
+            .canvas
+            .selection
+            .as_ref()
+            .expect("drag lasso membentuk seleksi");
+        assert!(matches!(sel, Seleksi::Poligon(_)), "varian poligon");
+        // Centroid segitiga ≈ (210, 173) — di dalam.
+        assert!(sel.contains(210, 173), "titik di dalam poligon terpilih");
+        assert!(!sel.contains(120, 120), "di luar poligon tak terpilih");
+
+        // Klik polos = hapus seleksi.
+        click(&mut app, &ctx, titik[0]);
+        assert!(app.canvas.selection.is_none(), "klik polos lasso menghapus");
+    }
+
+    #[test]
+    fn wand_klik_area_warna_membentuk_mask_seleksi_terclip_dan_dihapus() {
+        let mut app = test_app();
+        let ctx = test_ctx();
+        // Pemanasan: viewport ter-fit dulu sebelum `screen_of`.
+        frame(&mut app, &ctx, vec![]);
+
+        // Blok opak hasil satu klik brush di (403, 403).
+        app.tool = Tool::Brush;
+        let p = screen_of(&app, Vec2::new(403.0, 403.0));
+        click(&mut app, &ctx, p);
+        assert!(
+            app.canvas.raster.pixel(403, 403).unwrap().a > 0,
+            "blok tercat dulu"
+        );
+
+        frame(&mut app, &ctx, vec![key(egui::Key::W, Modifiers::NONE)]);
+        assert_eq!(app.tool, Tool::Wand, "W memilih tool wand");
+        click(&mut app, &ctx, p);
+        let sel = app
+            .canvas
+            .selection
+            .as_ref()
+            .expect("klik wand membentuk seleksi");
+        assert!(matches!(sel, Seleksi::Mask { .. }), "varian mask");
+        assert!(sel.contains(403, 403), "inti blok terpilih");
+        assert!(!sel.contains(420, 420), "area kosong di luar blok");
+
+        // Stroke brush di luar mask tak mengubah piksel (clipping mask).
+        app.tool = Tool::Brush;
+        app.color = Rgba::opaque(10, 220, 10);
+        let luar = screen_of(&app, Vec2::new(500.0, 403.0));
+        stroke(&mut app, &ctx, luar, luar);
+        assert_eq!(
+            app.canvas.raster.pixel(500, 403).unwrap().a,
+            0,
+            "stroke ter-clip mask wand"
+        );
+
+        // Delete menghapus isi mask.
+        frame(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Delete, Modifiers::NONE)],
+        );
+        assert_eq!(
+            app.canvas.raster.pixel(403, 403).unwrap().a,
+            0,
+            "Delete menghapus isi mask"
         );
     }
 

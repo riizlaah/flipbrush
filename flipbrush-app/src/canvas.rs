@@ -9,9 +9,10 @@
 //!   dari token `surface-1`/`surface-2`, sel 12 px layar stabil terhadap zoom.
 //! - **HUD** koordinat + zoom (`numeric`) di kiri bawah (§1.4 presisi).
 //! - **Klik-panjang** = eyedropper (§12.2) di tool mana pun.
-//! - **Seleksi marquee** (M4d): drag kotak → marching ants + highlight
-//!   ringan (§2.1); seluruh operasi gambar ter-clip area seleksi;
-//!   klik polos = hapus seleksi; `Delete` hapus isi seleksi (undo-able).
+//! - **Seleksi** (M4d): marquee (drag kotak), lasso (drag poligon) & wand
+//!   (klik area warna → mask flood-fill) → marching ants + highlight
+//!   ringan (§2.1); seluruh operasi gambar ter-clip area seleksi; klik
+//!   polos marquee/lasso = hapus seleksi; `Delete` hapus isi (undo-able).
 //! - **Onion skin** (§2.3, M3): frame sebelumnya merah / berikutnya biru —
 //!   aman buta warna (§9) — di atas overlay light table (putih @ 8%).
 //!
@@ -25,6 +26,7 @@ use eframe::egui::{
     self, Color32, CornerRadius, CursorIcon, Key, PointerButton, Pos2, Rect, Sense, Stroke,
     TextureFilter, TextureHandle, TextureOptions, TextureWrapMode, Ui, Vec2,
     epaint::{ColorImage, Shape, StrokeKind},
+    pos2,
 };
 use flipbrush_core::anim::{Animation, CelId, LayerId};
 use flipbrush_core::raster::{
@@ -173,11 +175,13 @@ pub struct Canvas {
     /// Seleksi aktif (M4d) — geometri dokumen, lintas cel; clipping semua
     /// operasi gambar + marching ants overlay. Transien (tak di-persist).
     pub selection: Option<Seleksi>,
-    /// Titik awal drag marquee (koordinat dokumen) — `None` saat tidak
-    /// sedang drag.
+    /// Titik awal drag tool seleksi (koordinat dokumen) — `None` saat
+    /// tidak sedang drag; rilis memindah `sel_preview` ke `selection`.
     sel_drag: Option<Vec2>,
-    /// Preview seleksi selama drag marquee (dipindah ke `selection` saat
-    /// rilis; klik polos menghasilkan `None` = hapus seleksi).
+    /// Jalur drag lasso (koordinat dokumen, urutan jalur — M4d tahap 2).
+    sel_lasso: Vec<Vec2>,
+    /// Preview seleksi selama drag marquee/lasso (dipindah ke `selection`
+    /// saat rilis; klik polos menghasilkan `None` = hapus seleksi).
     sel_preview: Option<Seleksi>,
 
     stroke: Option<StrokeInProgress>,
@@ -206,6 +210,7 @@ impl Canvas {
             dirty: None,
             selection: None,
             sel_drag: None,
+            sel_lasso: Vec::new(),
             sel_preview: None,
             stroke: None,
             sampler: StrokeSampler::default(),
@@ -287,6 +292,7 @@ impl Canvas {
         self.last_doc = None;
         self.was_down = false;
         self.sel_drag = None;
+        self.sel_lasso.clear();
         self.sel_preview = None;
         self.dirty = Some(PixelRect {
             x: 0,
@@ -361,7 +367,7 @@ impl Canvas {
     /// tetap ada (biasanya dibiarkan agar bisa mengulang); `true` bila ada
     /// piksel berubah (entri undo terbentuk).
     pub fn hapus_terpilih(&mut self) -> bool {
-        let Some(sel) = self.selection else {
+        let Some(sel) = self.selection.as_ref() else {
             return false;
         };
         let Some(result) = self.raster.clear_in(sel) else {
@@ -447,9 +453,10 @@ impl Canvas {
                 long: false,
             });
             self.last_doc = Some(pd);
-            if tool != Tool::Marquee {
-                // Drag marquee dimulai di blok (5) — reset sisa state lama.
+            if !tool.is_seleksi() {
+                // Drag seleksi dimulai di blok (5) — reset sisa state lama.
                 self.sel_drag = None;
+                self.sel_lasso.clear();
                 self.sel_preview = None;
             }
             if drawable {
@@ -464,7 +471,7 @@ impl Canvas {
                     brush,
                     *color,
                     erase,
-                    self.selection,
+                    self.selection.as_ref(),
                 );
                 self.sampler = sampler;
                 self.stroke = Some(StrokeInProgress { before });
@@ -529,22 +536,46 @@ impl Canvas {
                 brush,
                 *color,
                 erase,
-                self.selection,
+                self.selection.as_ref(),
             );
             self.last_doc = Some(pd);
             new_dirty = new_dirty.union(rect);
         }
 
-        // (5) Marquee (M4d): drag membentuk seleksi persegi; klik polos
-        // (tanpa geseran) menghasilkan `None` = hapus seleksi. Preview
+        // (5) Tool seleksi drag (M4d): marquee drag kotak / lasso drag
+        // poligon — akumulasi selama drag aktif (termasuk frame rilis, saat
+        // pointer masih terbaca via hover); klik polos menghasilkan `None`
+        // = hapus seleksi. Wand klik saja tanpa drag (blok 6b). Preview
         // digambar sebagai marching ants live di blok gambar.
-        if tool == Tool::Marquee && !space_held {
+        if matches!(tool, Tool::Marquee | Tool::Lasso) && !space_held {
             if down_now && let Some(pd) = pointer_doc {
                 self.sel_drag = Some(pd);
+                self.sel_lasso = vec![pd];
                 self.sel_preview = None;
             }
-            if let (Some(start), Some(pd)) = (self.sel_drag, pointer_doc) {
-                self.sel_preview = Seleksi::dari_drag((start.x, start.y), (pd.x, pd.y));
+            if let Some(start) = self.sel_drag
+                && let Some(pd) = pointer_doc
+            {
+                match tool {
+                    Tool::Marquee => {
+                        self.sel_preview = Seleksi::dari_drag((start.x, start.y), (pd.x, pd.y));
+                    }
+                    Tool::Lasso => {
+                        // Titik jalur baru bila cukup jauh (≥ 1 px dokumen)
+                        // — hindari akumulasi titik rapat saat pointer diam.
+                        let dekat = self
+                            .sel_lasso
+                            .last()
+                            .is_some_and(|l| (l.x - pd.x).abs() < 1.0 && (l.y - pd.y).abs() < 1.0);
+                        if !dekat {
+                            self.sel_lasso.push(pd);
+                        }
+                        self.sel_preview = Seleksi::dari_lasso(
+                            self.sel_lasso.iter().map(|p| [p.x, p.y]).collect(),
+                        );
+                    }
+                    _ => {} // Wand: resolusi saat klik (blok 6b).
+                }
             }
         }
 
@@ -559,7 +590,7 @@ impl Canvas {
             let gy = pd.y.floor() as i32;
             if let Some(result) =
                 self.raster
-                    .flood_fill_masked(gx, gy, *color, tolerance, self.selection)
+                    .flood_fill_masked(gx, gy, *color, tolerance, self.selection.as_ref())
             {
                 let after = self.raster.region(result.rect);
                 if result.before.data != after {
@@ -567,6 +598,19 @@ impl Canvas {
                 }
                 new_dirty = new_dirty.union(result.rect);
             }
+        }
+
+        // (6b) Wand (M4d tahap 2): klik area warna → resolusi flood-fill
+        // (toleransi kontrol yang sama dengan Fill) menjadi mask seleksi.
+        // Klik-panjang tetap eyedropper (guard `!p.long`).
+        if response.clicked()
+            && tool == Tool::Wand
+            && self.press.as_ref().is_some_and(|p| !p.long)
+            && let Some(pd) = pointer_doc
+        {
+            let gx = pd.x.floor() as i32;
+            let gy = pd.y.floor() as i32;
+            self.selection = Seleksi::dari_wand(&self.raster, gx, gy, tolerance);
         }
 
         // (7) Rilis: commit stroke & seleksi ke state.
@@ -644,11 +688,11 @@ impl Canvas {
             );
         }
         // Seleksi (M4d): marching ants di atas isi kanvas — preview live
-        // selama drag marquee, seleksi tersimpan setelah rilis.
+        // selama drag marquee/lasso, seleksi tersimpan setelah rilis.
         self.gambar_seleksi(
             painter,
             theme,
-            self.sel_preview.or(self.selection),
+            self.sel_preview.as_ref().or(self.selection.as_ref()),
             doc_rect,
         );
         self.hud(ui, theme, area, hover);
@@ -747,12 +791,14 @@ impl Canvas {
     /// Overlay marching ants seleksi (M4d): highlight ringan
     /// `accent/brand-subtle` (§2.1: "highlight seleksi ringan") di bawah
     /// garis putus-putus `border/strong` di atas isi kanvas, dipotong ke
-    /// rect dokumen.
+    /// rect dokumen. Marquee = isi rect penuh; lasso = isi poligon
+    /// (scanline even-odd — cekung aman) + jalur tertutup; wand = isi
+    /// span baris mask (bentuk asli region) + bbox putus-putus.
     fn gambar_seleksi(
         &self,
         painter: &egui::Painter,
         theme: &Theme,
-        sel: Option<Seleksi>,
+        sel: Option<&Seleksi>,
         doc_rect: Rect,
     ) {
         let Some(sel) = sel else {
@@ -769,22 +815,51 @@ impl Canvas {
             return;
         }
         // Highlight seleksi ringan (§2.1) — di bawah garis putus-putus.
-        painter.rect_filled(rect, 0.0, theme.accent_brand_subtle);
-        // Marching ants statis: putus-putus border/strong agar terbaca di
-        // atas isi kanvas terang maupun gelap (kontras §9).
-        let corners = [
-            rect.left_top(),
-            rect.right_top(),
-            rect.right_bottom(),
-            rect.left_bottom(),
-            rect.left_top(),
-        ];
-        painter.add(Shape::dashed_line(
-            &corners,
-            Stroke::new(1.0, theme.border_strong),
-            DASH_PX,
-            DASH_PX,
-        ));
+        let isi = theme.accent_brand_subtle;
+        match sel {
+            Seleksi::Kotak(_) => {
+                painter.rect_filled(rect, 0.0, isi);
+                marching_ants(
+                    painter,
+                    theme,
+                    &[
+                        rect.left_top(),
+                        rect.right_top(),
+                        rect.right_bottom(),
+                        rect.left_bottom(),
+                        rect.left_top(),
+                    ],
+                );
+            }
+            Seleksi::Poligon(titik) => {
+                let layar: Vec<Pos2> = titik
+                    .iter()
+                    .map(|p| self.viewport.to_screen(Vec2::new(p[0], p[1])).to_pos2())
+                    .collect();
+                if layar.len() >= 3 {
+                    isi_poligon(painter, &layar, isi, doc_rect);
+                    let mut tertutup = layar.clone();
+                    tertutup.push(layar[0]);
+                    marching_ants(painter, theme, &tertutup);
+                }
+            }
+            Seleksi::Mask { .. } => {
+                for span in spans_mask(sel, &self.viewport) {
+                    painter.rect_filled(span.intersect(doc_rect), 0.0, isi);
+                }
+                marching_ants(
+                    painter,
+                    theme,
+                    &[
+                        rect.left_top(),
+                        rect.right_top(),
+                        rect.right_bottom(),
+                        rect.left_bottom(),
+                        rect.left_top(),
+                    ],
+                );
+            }
+        }
     }
 }
 
@@ -817,6 +892,93 @@ fn full_image(raster: &Raster) -> ColorImage {
             h: raster.height,
         }),
     )
+}
+
+/// Garis putus-putus marching ants seleksi (`border/strong` — terbaca di
+/// atas isi terang maupun gelap, kontras §9).
+fn marching_ants(painter: &egui::Painter, theme: &Theme, titik: &[Pos2]) {
+    painter.add(Shape::dashed_line(
+        titik,
+        Stroke::new(1.0, theme.border_strong),
+        DASH_PX,
+        DASH_PX,
+    ));
+}
+
+/// Isi poligon layar (scanline even-odd per baris piksel) — highlight
+/// seleksi lasso; path epaint hanya mengisi poligon cekung, jadi baris
+/// disilangkan sendiri (deterministik, terpotong `batas`).
+fn isi_poligon(painter: &egui::Painter, titik: &[Pos2], warna: Color32, batas: Rect) {
+    let n = titik.len();
+    if n < 3 {
+        return;
+    }
+    let mut min_y = f32::INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for p in titik {
+        min_y = min_y.min(p.y);
+        max_y = max_y.max(p.y);
+    }
+    let y_awal = min_y.max(batas.top()).floor() as i32;
+    let y_akhir = max_y.min(batas.bottom()).ceil() as i32;
+    let mut silang: Vec<f32> = Vec::with_capacity(n);
+    for y in y_awal..y_akhir {
+        let yc = y as f32 + 0.5;
+        silang.clear();
+        for i in 0..n {
+            let a = titik[i];
+            let b = titik[(i + 1) % n];
+            if (a.y > yc) != (b.y > yc) {
+                let t = (yc - a.y) / (b.y - a.y);
+                silang.push(a.x + t * (b.x - a.x));
+            }
+        }
+        silang.sort_by(f32::total_cmp);
+        let mut j = 0;
+        while j + 1 < silang.len() {
+            let x0 = silang[j].max(batas.left());
+            let x1 = silang[j + 1].min(batas.right());
+            if x1 > x0 {
+                painter.rect_filled(
+                    Rect::from_min_max(pos2(x0, y as f32), pos2(x1, y as f32 + 1.0)),
+                    0.0,
+                    warna,
+                );
+            }
+            j += 2;
+        }
+    }
+}
+
+/// Span baris hasil run-length mask wand (koordinat layar) — highlight
+/// mengikuti bentuk asli region; satu baris menyatu jadi satu rect.
+fn spans_mask(sel: &Seleksi, viewport: &Viewport) -> Vec<Rect> {
+    let Seleksi::Mask { rect, bits } = sel else {
+        return Vec::new();
+    };
+    let mut hasil = Vec::new();
+    for row in 0..rect.h {
+        let dasar = (row * rect.w) as usize;
+        let mut x = 0u32;
+        while x < rect.w {
+            if bits[dasar + x as usize] == 1 {
+                let mulai = x;
+                while x < rect.w && bits[dasar + x as usize] == 1 {
+                    x += 1;
+                }
+                let min = viewport
+                    .to_screen(Vec2::new((rect.x + mulai) as f32, (rect.y + row) as f32))
+                    .to_pos2();
+                let maks = viewport
+                    .to_screen(Vec2::new((rect.x + x) as f32, (rect.y + row + 1) as f32))
+                    .to_pos2();
+                hasil.push(Rect::from_min_max(min, maks));
+            } else {
+                x += 1;
+            }
+        }
+    }
+    hasil
 }
 
 /// Papan catur 2×2 sel dari token netral (§1.3: tanpa chromatic; selalu
