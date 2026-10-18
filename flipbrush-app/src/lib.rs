@@ -24,6 +24,9 @@
 //! vs tab order saat widget berfokus), `Esc` keluar mode fokus, tombol ikon,
 //! tab dock, chevron, dan kotak warna punya fokus keyboard & aktivasi
 //! `Enter`/`Space` (`icon::teraktivasi`).
+//! M4d tahap 1 (§12.2): marquee + model seleksi (`canvas`, core
+//! `seleksi`) — marching ants + highlight §2.1, operasi gambar ter-clip
+//! seleksi, `Delete` hapus isi seleksi.
 
 pub mod canvas;
 pub mod color;
@@ -284,6 +287,9 @@ impl FlipbrushApp {
             palette::Aksi::ModeFokus => self.focus_mode = !self.focus_mode,
             palette::Aksi::Tab(tab) => self.dock.buka_tab(tab),
             palette::Aksi::PutarJeda => self.timeline.playing = !self.timeline.playing,
+            palette::Aksi::HapusSeleksi => {
+                self.canvas.hapus_terpilih();
+            }
         }
     }
 
@@ -328,6 +334,14 @@ impl FlipbrushApp {
                     ui.label(
                         Type::Body
                             .rich("Klik-panjang di kanvas untuk mengambil warna")
+                            .color(theme.text_secondary),
+                    );
+                }
+                Tool::Marquee => {
+                    // M4d: marquee tanpa kontrol — hint pemakaian saja.
+                    ui.label(
+                        Type::Body
+                            .rich("Drag pilih area · klik hapus seleksi · Delete hapus isi")
                             .color(theme.text_secondary),
                     );
                 }
@@ -480,9 +494,10 @@ impl FlipbrushApp {
         let _ = std::fs::remove_file(path);
     }
 
-    /// Shortcut desktop §12.2: tool `B/E/G/I`, undo `Ctrl+Z`, redo
+    /// Shortcut desktop §12.2: tool `B/E/G/I/M`, undo `Ctrl+Z`, redo
     /// `Ctrl+Shift+Z`, mode fokus `Tab` (§8.2), command palette `Ctrl+K`
-    /// (§7.10), `Esc` menutup mode fokus (§9: Esc selalu menutup).
+    /// (§7.10), `Esc` menutup mode fokus (§9), `Delete` hapus isi seleksi
+    /// (M4d).
     /// Dikonsumsi hanya bila tidak sedang mengetik (agar edit nilai §7.2
     /// tidak terganggu); saat palette terbuka semua shortcut lain
     /// dibekukan — hanya `Ctrl+K` yang menutupnya kembali.
@@ -522,7 +537,7 @@ impl FlipbrushApp {
         // berfokus keyboard; bila sudah ada (mis. setelah menyorot slider),
         // `Tab` dibiarkan egui untuk tab order §9.
         let punya_fokus = ctx.memory(|m| m.focused().is_some());
-        let (switch, undo, redo, focus) = ctx.input_mut(|i| {
+        let (switch, undo, redo, focus, hapus) = ctx.input_mut(|i| {
             let switch = Tool::ALL
                 .into_iter()
                 .find(|tool| i.consume_key(egui::Modifiers::NONE, tool.key()));
@@ -531,7 +546,8 @@ impl FlipbrushApp {
             let redo = i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::Z);
             let undo = i.consume_key(egui::Modifiers::CTRL, egui::Key::Z);
             let focus = !punya_fokus && i.consume_key(egui::Modifiers::NONE, egui::Key::Tab);
-            (switch, undo, redo, focus)
+            let hapus = i.consume_key(egui::Modifiers::NONE, egui::Key::Delete);
+            (switch, undo, redo, focus, hapus)
         });
         if let Some(tool) = switch {
             self.tool = tool;
@@ -549,6 +565,11 @@ impl FlipbrushApp {
             // awal pass — arah dibersihkan agar widget pertama tidak ikut
             // merebut fokus keyboard saat chrome sedang beralih (§9).
             ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+        }
+        if hapus {
+            // Delete (M4d): hapus isi seleksi — tanpa efek bila tak ada
+            // seleksi. Gated di atas: tak mengganggu edit nilai/rename.
+            self.canvas.hapus_terpilih();
         }
     }
 }
@@ -601,6 +622,8 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
 mod tests {
     use super::*;
     use eframe::egui::{Modifiers, PointerButton, Pos2, RawInput, Vec2, pos2};
+    use flipbrush_core::raster::Rect as PixelRect;
+    use flipbrush_core::seleksi::Seleksi;
 
     const SCREEN: [f32; 2] = [1280.0, 800.0];
 
@@ -961,6 +984,113 @@ mod tests {
         ctx.memory_mut(|m| m.request_focus(egui::Id::new("kotak-warna")));
         frame(&mut app, &ctx, vec![key(egui::Key::Enter, Modifiers::NONE)]);
         assert_eq!(app.dock.tab, dock::PanelTab::Color);
+    }
+
+    // -------------------------------------------------------------------------
+    // M4d — marquee + model seleksi (§12.2 toolset lanjutan)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn marquee_drag_membentuk_seleksi_klik_pola_menghapus() {
+        let mut app = test_app();
+        let ctx = test_ctx();
+
+        frame(&mut app, &ctx, vec![key(egui::Key::M, Modifiers::NONE)]);
+        assert_eq!(app.tool, Tool::Marquee, "M memilih tool marquee");
+
+        let a = screen_of(&app, Vec2::new(100.0, 100.0));
+        let b = screen_of(&app, Vec2::new(300.0, 220.0));
+        stroke(&mut app, &ctx, a, b);
+        let sel = app
+            .canvas
+            .selection
+            .expect("drag marquee membentuk seleksi");
+        let r = sel.rect();
+        assert!(
+            r.x <= 100 && r.x + r.w >= 300 && r.y <= 100 && r.y + r.h >= 220,
+            "seleksi mencakup area drag: {r:?}"
+        );
+
+        // Klik polos (tanpa geseran) = hapus seleksi.
+        click(&mut app, &ctx, a);
+        assert!(
+            app.canvas.selection.is_none(),
+            "klik polos marquee menghapus seleksi"
+        );
+    }
+
+    #[test]
+    fn stroke_terclip_seleksi_dan_delete_hapus_isi_lalu_undo() {
+        let mut app = test_app();
+        let ctx = test_ctx();
+        // Frame pemanasan: viewport baru ter-fit setelah kanvas tampil
+        // pertama kali — `screen_of` harus dipanggil sesudahnya.
+        frame(&mut app, &ctx, vec![]);
+
+        // Seleksi kotak di (380,380)–(500,500) dokumen.
+        app.canvas.selection = Some(Seleksi::Kotak(PixelRect {
+            x: 380,
+            y: 380,
+            w: 120,
+            h: 120,
+        }));
+        app.tool = Tool::Brush;
+        app.color = Rgba::opaque(200, 40, 40);
+
+        // Stroke menyilang batas: dari dalam seleksi ke luarnya.
+        let a = screen_of(&app, Vec2::new(400.0, 400.0));
+        let b = screen_of(&app, Vec2::new(600.0, 400.0));
+        stroke(&mut app, &ctx, a, b);
+
+        let dalam = app.canvas.raster.pixel(400, 400).unwrap();
+        assert_eq!(dalam.r, 200, "di dalam seleksi ikut tercat");
+        let luar = app.canvas.raster.pixel(600, 400).unwrap();
+        assert_eq!(luar.a, 0, "di luar seleksi tak tersentuh stroke (M4d)");
+
+        // Delete menghapus isi seleksi (M4d) — undo mengembalikannya.
+        frame(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Delete, Modifiers::NONE)],
+        );
+        assert_eq!(
+            app.canvas.raster.pixel(400, 400).unwrap().a,
+            0,
+            "Delete menghapus isi seleksi"
+        );
+        frame(&mut app, &ctx, vec![key(egui::Key::Z, Modifiers::CTRL)]);
+        assert!(
+            app.canvas.raster.pixel(400, 400).unwrap().a > 0,
+            "Delete bisa di-undo"
+        );
+    }
+
+    #[test]
+    fn delete_tanpa_seleksi_tanpa_efek_samping() {
+        let mut app = test_app();
+        let ctx = test_ctx();
+        // Frame pemanasan agar viewport sudah ter-fit sebelum `screen_of`.
+        frame(&mut app, &ctx, vec![]);
+
+        // Gambar satu titik dulu — Delete tanpa seleksi tak boleh
+        // menyentuhnya (apalagi bikin entri riwayat).
+        app.tool = Tool::Brush;
+        let p = screen_of(&app, Vec2::new(400.0, 400.0));
+        click(&mut app, &ctx, p);
+        assert!(app.canvas.raster.pixel(400, 400).unwrap().a > 0);
+        let riwayat = app.canvas.history.can_undo();
+
+        frame(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Delete, Modifiers::NONE)],
+        );
+        assert!(app.canvas.raster.pixel(400, 400).unwrap().a > 0, "utuh");
+        assert_eq!(
+            app.canvas.history.can_undo(),
+            riwayat,
+            "tanpa seleksi = tanpa entri riwayat baru"
+        );
     }
 
     #[test]

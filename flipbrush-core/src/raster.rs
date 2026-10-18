@@ -10,6 +10,8 @@
 
 use std::collections::VecDeque;
 
+use crate::seleksi::Seleksi;
+
 /// Batas ukuran kanvas v1 (DESIGN §13.3): di atas ini proyek ditolak
 /// dengan pesan yang jelas.
 pub const MAX_DIMENSION: u32 = 4096;
@@ -194,6 +196,19 @@ impl Raster {
     /// mode penghapus: alpha keluar, RGB tak berubah). Mengembalikan area
     /// yang tersentuh (sudah dipotong ke kanvas).
     pub fn stamp(&mut self, center: (f32, f32), brush: Brush, color: Rgba, erase: bool) -> Rect {
+        self.stamp_masked(center, brush, color, erase, None)
+    }
+
+    /// Seperti [`Self::stamp`] dengan mask seleksi (M4d): piksel di luar
+    /// area seleksi tidak disentuh — stroke ter-clip pada marching ants.
+    pub fn stamp_masked(
+        &mut self,
+        center: (f32, f32),
+        brush: Brush,
+        color: Rgba,
+        erase: bool,
+        mask: Option<Seleksi>,
+    ) -> Rect {
         let opacity = brush.opacity.clamp(0.0, 1.0);
         if opacity <= 0.0 {
             return Rect::EMPTY;
@@ -216,6 +231,11 @@ impl Raster {
 
         for y in rect.y..rect.y + rect.h {
             for x in rect.x..rect.x + rect.w {
+                if let Some(mask) = mask
+                    && !mask.contains(x as i32, y as i32)
+                {
+                    continue;
+                }
                 let dx = x as f32 + 0.5 - center.0;
                 let dy = y as f32 + 0.5 - center.1;
                 let dist = (dx * dx + dy * dy).sqrt();
@@ -303,8 +323,24 @@ impl Raster {
     /// fill). `tolerance` = selisih kanal maksimum 0..255. Mengembalikan
     /// area terisi + salinan pikel *sebelum* fill untuk undo.
     pub fn flood_fill(&mut self, x: i32, y: i32, color: Rgba, tolerance: u8) -> Option<FillResult> {
+        self.flood_fill_masked(x, y, color, tolerance, None)
+    }
+
+    /// Seperti [`Self::flood_fill`] dengan mask seleksi (M4d): isian hanya
+    /// mengalir di dalam area seleksi; benih di luar seleksi = tanpa isi.
+    pub fn flood_fill_masked(
+        &mut self,
+        x: i32,
+        y: i32,
+        color: Rgba,
+        tolerance: u8,
+        mask: Option<Seleksi>,
+    ) -> Option<FillResult> {
         if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
             return None;
+        }
+        if mask.is_some_and(|m| !m.contains(x, y)) {
+            return None; // benih di luar seleksi — tak ada yang bisa diisi
         }
         let seed = self.get(x as u32, y as u32);
         if seed == color {
@@ -318,6 +354,8 @@ impl Raster {
                 && p.b.abs_diff(seed.b) <= tolerance
                 && p.a.abs_diff(seed.a) <= tolerance
         };
+        // Batas mask seleksi — isi hanya mengalir di dalam area (M4d).
+        let di_seleksi = |x: i32, y: i32| mask.is_none_or(|m| m.contains(x, y));
 
         let mut rect = Rect::EMPTY;
         let mut before = RegionBuf::empty();
@@ -325,11 +363,15 @@ impl Raster {
         while let Some((sx, sy)) = stack.pop() {
             // Rentang horizontal berisi di baris `sy`.
             let mut x0 = sx;
-            while x0 > 0 && matches(self.get((x0 - 1) as u32, sy as u32)) {
+            while x0 > 0 && di_seleksi(x0 - 1, sy) && matches(self.get((x0 - 1) as u32, sy as u32))
+            {
                 x0 -= 1;
             }
             let mut x1 = sx;
-            while x1 + 1 < self.width as i32 && matches(self.get((x1 + 1) as u32, sy as u32)) {
+            while x1 + 1 < self.width as i32
+                && di_seleksi(x1 + 1, sy)
+                && matches(self.get((x1 + 1) as u32, sy as u32))
+            {
                 x1 += 1;
             }
             let span = Rect {
@@ -355,15 +397,39 @@ impl Raster {
                 }
                 let mut xi = x0;
                 while xi <= x1 {
-                    if matches(self.get(xi as u32, ny as u32)) {
+                    if di_seleksi(xi, ny) && matches(self.get(xi as u32, ny as u32)) {
                         stack.push((xi, ny));
-                        while xi <= x1 && matches(self.get(xi as u32, ny as u32)) {
+                        while xi <= x1
+                            && di_seleksi(xi, ny)
+                            && matches(self.get(xi as u32, ny as u32))
+                        {
                             xi += 1;
                         }
                     } else {
                         xi += 1;
                     }
                 }
+            }
+        }
+        Some(FillResult { rect, before })
+    }
+
+    /// Hapus piksel di dalam area seleksi — shortcut `Delete` (M4d).
+    /// Mengembalikan area + piksel sebelumnya untuk undo; `None` bila area
+    /// seleksi di luar kanvas.
+    pub fn clear_in(&mut self, sel: Seleksi) -> Option<FillResult> {
+        let rect = sel.rect().intersect(self.bounds());
+        if rect.is_empty() {
+            return None;
+        }
+        let before = RegionBuf::capture(self, rect);
+        for y in rect.y..rect.y + rect.h {
+            for x in rect.x..rect.x + rect.w {
+                if !sel.contains(x as i32, y as i32) {
+                    continue;
+                }
+                let i = ((y * self.width + x) * 4) as usize;
+                self.pixels[i..i + 4].fill(0);
             }
         }
         Some(FillResult { rect, before })
@@ -385,7 +451,8 @@ pub struct StrokeSampler {
 }
 
 impl StrokeSampler {
-    /// Tempel satu titik awal (awal tekan).
+    /// Tempel satu titik awal (awal tekan). `mask` = clipping seleksi
+    /// (M4d) — diteruskan ke [`Raster::stamp_masked`].
     pub fn begin(
         &mut self,
         point: (f32, f32),
@@ -393,12 +460,14 @@ impl StrokeSampler {
         brush: Brush,
         color: Rgba,
         erase: bool,
+        mask: Option<Seleksi>,
     ) -> Rect {
         self.carry = 0.0;
-        raster.stamp(point, brush, color, erase)
+        raster.stamp_masked(point, brush, color, erase, mask)
     }
 
     /// Lanjutkan stroke dari `from` ke `to`. Kosong bila `from == to`.
+    #[allow(clippy::too_many_arguments)]
     pub fn segment(
         &mut self,
         from: (f32, f32),
@@ -407,6 +476,7 @@ impl StrokeSampler {
         brush: Brush,
         color: Rgba,
         erase: bool,
+        mask: Option<Seleksi>,
     ) -> Rect {
         let (dx, dy) = (to.0 - from.0, to.1 - from.1);
         let dist = (dx * dx + dy * dy).sqrt();
@@ -420,7 +490,7 @@ impl StrokeSampler {
         while s <= dist {
             let t = s / dist;
             let point = (from.0 + dx * t, from.1 + dy * t);
-            dirty = dirty.union(raster.stamp(point, brush, color, erase));
+            dirty = dirty.union(raster.stamp_masked(point, brush, color, erase, mask));
             s += spacing;
         }
         self.carry = (self.carry + dist) % spacing;
@@ -693,14 +763,38 @@ mod tests {
         };
         let mut lurus = Raster::new(64, 16);
         let mut s = StrokeSampler::default();
-        s.begin((4.0, 8.0), &mut lurus, brush, ink(), false);
-        s.segment((4.0, 8.0), (20.0, 8.0), &mut lurus, brush, ink(), false);
+        s.begin((4.0, 8.0), &mut lurus, brush, ink(), false, None);
+        s.segment(
+            (4.0, 8.0),
+            (20.0, 8.0),
+            &mut lurus,
+            brush,
+            ink(),
+            false,
+            None,
+        );
 
         let mut bersegi = Raster::new(64, 16);
         let mut s2 = StrokeSampler::default();
-        s2.begin((4.0, 8.0), &mut bersegi, brush, ink(), false);
-        s2.segment((4.0, 8.0), (7.0, 8.0), &mut bersegi, brush, ink(), false);
-        s2.segment((7.0, 8.0), (20.0, 8.0), &mut bersegi, brush, ink(), false);
+        s2.begin((4.0, 8.0), &mut bersegi, brush, ink(), false, None);
+        s2.segment(
+            (4.0, 8.0),
+            (7.0, 8.0),
+            &mut bersegi,
+            brush,
+            ink(),
+            false,
+            None,
+        );
+        s2.segment(
+            (7.0, 8.0),
+            (20.0, 8.0),
+            &mut bersegi,
+            brush,
+            ink(),
+            false,
+            None,
+        );
 
         for y in 0..16 {
             for x in 0..64 {
@@ -859,6 +953,114 @@ mod tests {
         assert!(h.undo(&mut r).is_some());
         assert!(h.undo(&mut r).is_some());
         assert!(!h.can_undo(), "entri terlama dibuang melewati batas");
+    }
+
+    // -------------------------------------------------------------------------
+    // M4d — clipping seleksi (marquee tahap 1)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn stamp_masked_terbatas_area_seleksi() {
+        let mut r = Raster::new(16, 16);
+        let brush = Brush {
+            size: 6.0,
+            ..Brush::default()
+        };
+        let sel = Seleksi::Kotak(Rect {
+            x: 4,
+            y: 4,
+            w: 4,
+            h: 4,
+        });
+        let rect = r.stamp_masked((6.0, 6.0), brush, ink(), false, Some(sel));
+        assert!(rect.w > 0 && rect.h > 0, "ada area kotor");
+        assert!(r.pixel(6, 6).unwrap().a > 0, "inti kuas di dalam seleksi");
+        // Radius 3 (+ feather): (3, 6) masih dalam jangkauan kuas TAPI di
+        // luar seleksi (x < 4) — wajib tetap transparan.
+        assert_eq!(r.pixel(3, 6).unwrap().a, 0, "luar seleksi tak tersentuh");
+        assert_eq!(r.pixel(6, 3).unwrap().a, 0, "luar seleksi tak tersentuh");
+    }
+
+    #[test]
+    fn flood_fill_masked_mengalir_hanya_dalam_seleksi() {
+        let mut r = Raster::new(8, 1);
+        let sel = Seleksi::Kotak(Rect {
+            x: 2,
+            y: 0,
+            w: 1,
+            h: 1,
+        });
+        let hasil = r
+            .flood_fill_masked(2, 0, Rgba::opaque(255, 0, 0), 0, Some(sel))
+            .expect("benih di dalam seleksi");
+        assert_eq!(r.pixel(2, 0).unwrap().r, 255, "benih terisi");
+        assert_eq!(r.pixel(1, 0).unwrap().a, 0, "tetangga di luar seleksi utuh");
+        assert_eq!(r.pixel(3, 0).unwrap().a, 0, "tetangga di luar seleksi utuh");
+        assert_eq!(
+            hasil.rect,
+            Rect {
+                x: 2,
+                y: 0,
+                w: 1,
+                h: 1
+            },
+            "area hasil = mask yang terisi"
+        );
+    }
+
+    #[test]
+    fn flood_fill_masked_benih_di_luar_seleksi_diam() {
+        let mut r = Raster::new(8, 1);
+        let sel = Seleksi::Kotak(Rect {
+            x: 4,
+            y: 0,
+            w: 1,
+            h: 1,
+        });
+        assert!(
+            r.flood_fill_masked(0, 0, Rgba::opaque(255, 0, 0), 0, Some(sel))
+                .is_none(),
+            "benih di luar seleksi = tanpa isi"
+        );
+        assert_eq!(r.pixel(4, 0).unwrap().a, 0, "tak ada efek samping");
+    }
+
+    #[test]
+    fn clear_in_menghapus_hanya_dalam_seleksi_dan_bisa_undo() {
+        let mut r = Raster::new(4, 4);
+        r.stamp(
+            (2.0, 2.0),
+            Brush {
+                size: 4.0,
+                ..Brush::default()
+            },
+            ink(),
+            false,
+        );
+        let sel = Seleksi::Kotak(Rect {
+            x: 0,
+            y: 0,
+            w: 2,
+            h: 2,
+        });
+        let hasil = r.clear_in(sel).expect("area seleksi di dalam kanvas");
+        assert_eq!(r.pixel(1, 1).unwrap().a, 0, "dalam seleksi: transparan");
+        assert!(r.pixel(3, 1).unwrap().a > 0, "luar seleksi: utuh");
+        // Data "sebelum" mengembalikan isi seleksi (jalur undo).
+        hasil.before.restore(&mut r);
+        assert!(r.pixel(1, 1).unwrap().a > 0, "isi pulih dari data sebelum");
+    }
+
+    #[test]
+    fn clear_in_seleksi_di_luar_kanvas_kosong() {
+        let mut r = Raster::new(4, 4);
+        let sel = Seleksi::Kotak(Rect {
+            x: 10,
+            y: 10,
+            w: 2,
+            h: 2,
+        });
+        assert!(r.clear_in(sel).is_none(), "tak ada area tersentuh");
     }
 
     // Kecil: akses piksel snapshot untuk asersi di atas.

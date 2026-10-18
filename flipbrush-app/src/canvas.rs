@@ -9,6 +9,9 @@
 //!   dari token `surface-1`/`surface-2`, sel 12 px layar stabil terhadap zoom.
 //! - **HUD** koordinat + zoom (`numeric`) di kiri bawah (§1.4 presisi).
 //! - **Klik-panjang** = eyedropper (§12.2) di tool mana pun.
+//! - **Seleksi marquee** (M4d): drag kotak → marching ants + highlight
+//!   ringan (§2.1); seluruh operasi gambar ter-clip area seleksi;
+//!   klik polos = hapus seleksi; `Delete` hapus isi seleksi (undo-able).
 //! - **Onion skin** (§2.3, M3): frame sebelumnya merah / berikutnya biru —
 //!   aman buta warna (§9) — di atas overlay light table (putih @ 8%).
 //!
@@ -21,12 +24,13 @@ use std::collections::HashMap;
 use eframe::egui::{
     self, Color32, CornerRadius, CursorIcon, Key, PointerButton, Pos2, Rect, Sense, Stroke,
     TextureFilter, TextureHandle, TextureOptions, TextureWrapMode, Ui, Vec2,
-    epaint::{ColorImage, StrokeKind},
+    epaint::{ColorImage, Shape, StrokeKind},
 };
 use flipbrush_core::anim::{Animation, CelId, LayerId};
 use flipbrush_core::raster::{
     Brush, DEFAULT_HISTORY, History, Raster, Rect as PixelRect, RegionBuf, Rgba, StrokeSampler,
 };
+use flipbrush_core::seleksi::Seleksi;
 
 use crate::theme::{Theme, radius, spacing};
 use crate::tool::Tool;
@@ -48,6 +52,8 @@ const LONG_PRESS_S: f64 = 0.5;
 const LONG_PRESS_SLACK_PX: f32 = 6.0;
 /// Opasitas siluet onion skin di atas light table (§2.3 — konstanta non-hex).
 const ONION_ALPHA: f32 = 0.5;
+/// Panjang segmen garis putus-putus marching ants seleksi (M4d, px layar).
+const DASH_PX: f32 = 4.0;
 
 // ---------------------------------------------------------------------------
 // Viewport
@@ -164,6 +170,16 @@ pub struct Canvas {
     /// Area kotor menunggu unggahan parsial.
     dirty: Option<PixelRect>,
 
+    /// Seleksi aktif (M4d) — geometri dokumen, lintas cel; clipping semua
+    /// operasi gambar + marching ants overlay. Transien (tak di-persist).
+    pub selection: Option<Seleksi>,
+    /// Titik awal drag marquee (koordinat dokumen) — `None` saat tidak
+    /// sedang drag.
+    sel_drag: Option<Vec2>,
+    /// Preview seleksi selama drag marquee (dipindah ke `selection` saat
+    /// rilis; klik polos menghasilkan `None` = hapus seleksi).
+    sel_preview: Option<Seleksi>,
+
     stroke: Option<StrokeInProgress>,
     sampler: StrokeSampler,
     last_doc: Option<Vec2>,
@@ -188,6 +204,9 @@ impl Canvas {
             onion_key: None,
             tex_nearest: false,
             dirty: None,
+            selection: None,
+            sel_drag: None,
+            sel_preview: None,
             stroke: None,
             sampler: StrokeSampler::default(),
             last_doc: None,
@@ -261,11 +280,14 @@ impl Canvas {
             self.active_cel = Some(id);
         }
         // Reset state interaksi + unggah ulang penuh. Viewport tetap —
-        // dokumen tidak berubah ukuran, jadi tanpa refit.
+        // dokumen tidak berubah ukuran, jadi tanpa refit. Seleksi dokumen
+        // (M4d) ikut bertahan — berlaku lintas cel.
         self.stroke = None;
         self.press = None;
         self.last_doc = None;
         self.was_down = false;
+        self.sel_drag = None;
+        self.sel_preview = None;
         self.dirty = Some(PixelRect {
             x: 0,
             y: 0,
@@ -329,6 +351,26 @@ impl Canvas {
     pub fn redo(&mut self) -> bool {
         if let Some(rect) = self.history.redo(&mut self.raster) {
             self.mark_dirty(rect);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Hapus piksel di dalam seleksi — shortcut `Delete` (M4d). Seleksi
+    /// tetap ada (biasanya dibiarkan agar bisa mengulang); `true` bila ada
+    /// piksel berubah (entri undo terbentuk).
+    pub fn hapus_terpilih(&mut self) -> bool {
+        let Some(sel) = self.selection else {
+            return false;
+        };
+        let Some(result) = self.raster.clear_in(sel) else {
+            return false;
+        };
+        let after = self.raster.region(result.rect);
+        if result.before.data != after {
+            self.history.push(result.rect, result.before.data, after);
+            self.mark_dirty(result.rect);
             true
         } else {
             false
@@ -405,13 +447,25 @@ impl Canvas {
                 long: false,
             });
             self.last_doc = Some(pd);
+            if tool != Tool::Marquee {
+                // Drag marquee dimulai di blok (5) — reset sisa state lama.
+                self.sel_drag = None;
+                self.sel_preview = None;
+            }
             if drawable {
                 let erase = tool == Tool::Eraser;
                 // Salin "sebelum" dulu (bbox prediksi ⊇ area tempa), baru tempa.
                 let mut before = RegionBuf::empty();
                 before.expand(&self.raster, predict_bbox(pd, pd, brush));
                 let mut sampler = StrokeSampler::default();
-                let rect = sampler.begin((pd.x, pd.y), &mut self.raster, brush, *color, erase);
+                let rect = sampler.begin(
+                    (pd.x, pd.y),
+                    &mut self.raster,
+                    brush,
+                    *color,
+                    erase,
+                    self.selection,
+                );
                 self.sampler = sampler;
                 self.stroke = Some(StrokeInProgress { before });
                 new_dirty = new_dirty.union(rect);
@@ -475,13 +529,27 @@ impl Canvas {
                 brush,
                 *color,
                 erase,
+                self.selection,
             );
             self.last_doc = Some(pd);
             new_dirty = new_dirty.union(rect);
         }
 
-        // (5) Fill (§12.2): aktif saat klik (tekan–lepas diam — bukan
-        // klik-panjang, yang berarti eyedropper).
+        // (5) Marquee (M4d): drag membentuk seleksi persegi; klik polos
+        // (tanpa geseran) menghasilkan `None` = hapus seleksi. Preview
+        // digambar sebagai marching ants live di blok gambar.
+        if tool == Tool::Marquee && !space_held {
+            if down_now && let Some(pd) = pointer_doc {
+                self.sel_drag = Some(pd);
+                self.sel_preview = None;
+            }
+            if let (Some(start), Some(pd)) = (self.sel_drag, pointer_doc) {
+                self.sel_preview = Seleksi::dari_drag((start.x, start.y), (pd.x, pd.y));
+            }
+        }
+
+        // (6) Fill (§12.2): aktif saat klik (tekan–lepas diam — bukan
+        // klik-panjang, yang berarti eyedropper); ter-clip seleksi (M4d).
         if response.clicked()
             && tool == Tool::Fill
             && self.press.as_ref().is_some_and(|p| !p.long)
@@ -489,7 +557,10 @@ impl Canvas {
         {
             let gx = pd.x.floor() as i32;
             let gy = pd.y.floor() as i32;
-            if let Some(result) = self.raster.flood_fill(gx, gy, *color, tolerance) {
+            if let Some(result) =
+                self.raster
+                    .flood_fill_masked(gx, gy, *color, tolerance, self.selection)
+            {
                 let after = self.raster.region(result.rect);
                 if result.before.data != after {
                     self.history.push(result.rect, result.before.data, after);
@@ -498,10 +569,13 @@ impl Canvas {
             }
         }
 
-        // (6) Rilis: commit stroke ke riwayat.
+        // (7) Rilis: commit stroke & seleksi ke state.
         if up_now {
             if let Some(stroke) = self.stroke.take() {
                 commit_stroke(&mut self.history, &self.raster, stroke);
+            }
+            if self.sel_drag.take().is_some() {
+                self.selection = self.sel_preview.take();
             }
             self.last_doc = None;
             self.press = None;
@@ -569,6 +643,14 @@ impl Canvas {
                 Color32::WHITE,
             );
         }
+        // Seleksi (M4d): marching ants di atas isi kanvas — preview live
+        // selama drag marquee, seleksi tersimpan setelah rilis.
+        self.gambar_seleksi(
+            painter,
+            theme,
+            self.sel_preview.or(self.selection),
+            doc_rect,
+        );
         self.hud(ui, theme, area, hover);
     }
 
@@ -660,6 +742,49 @@ impl Canvas {
             StrokeKind::Middle,
         );
         painter.galley(chip.min + Vec2::splat(pad), galley, theme.text_secondary);
+    }
+
+    /// Overlay marching ants seleksi (M4d): highlight ringan
+    /// `accent/brand-subtle` (§2.1: "highlight seleksi ringan") di bawah
+    /// garis putus-putus `border/strong` di atas isi kanvas, dipotong ke
+    /// rect dokumen.
+    fn gambar_seleksi(
+        &self,
+        painter: &egui::Painter,
+        theme: &Theme,
+        sel: Option<Seleksi>,
+        doc_rect: Rect,
+    ) {
+        let Some(sel) = sel else {
+            return;
+        };
+        let r = sel.rect();
+        let min = self
+            .viewport
+            .to_screen(Vec2::new(r.x as f32, r.y as f32))
+            .to_pos2();
+        let rect = Rect::from_min_size(min, Vec2::new(r.w as f32, r.h as f32) * self.viewport.zoom)
+            .intersect(doc_rect);
+        if rect.width() <= 0.0 || rect.height() <= 0.0 {
+            return;
+        }
+        // Highlight seleksi ringan (§2.1) — di bawah garis putus-putus.
+        painter.rect_filled(rect, 0.0, theme.accent_brand_subtle);
+        // Marching ants statis: putus-putus border/strong agar terbaca di
+        // atas isi kanvas terang maupun gelap (kontras §9).
+        let corners = [
+            rect.left_top(),
+            rect.right_top(),
+            rect.right_bottom(),
+            rect.left_bottom(),
+            rect.left_top(),
+        ];
+        painter.add(Shape::dashed_line(
+            &corners,
+            Stroke::new(1.0, theme.border_strong),
+            DASH_PX,
+            DASH_PX,
+        ));
     }
 }
 

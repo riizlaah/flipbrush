@@ -545,6 +545,18 @@ M5/M6)*
   (belum masuk tab order — penyempurnaan menyusul) — e2e: `Tab` → `Esc`
   keluar fokus; klik slider lalu `Tab` berpindah kontrol; `Enter` pada kotak
   warna berfokus membuka tab Color.
+- *(M4d tahap 1 selesai)* marquee + model seleksi (`flipbrush-core::seleksi`):
+  tool Marquee (`M`) — drag kotak membentuk seleksi, klik polos menghapus;
+  overlay marching ants statis (garis putus `border/strong`) + highlight
+  ringan `accent/brand-subtle` (§2.1) di atas isi kanvas; seluruh operasi
+  gambar (tempa brush/eraser, flood fill) ter-clip area seleksi
+  (`stamp_masked`/`flood_fill_masked` — benih fill di luar seleksi = tanpa
+  efek); `Delete` menghapus isi seleksi (undo-able lewat area kotor);
+  seleksi = geometri dokumen (lintas cel, ikut `switch_cel`), transien
+  (tak di-persist ke `.flip`); rail punya grup seleksi terpisah divider
+  (§7.4); palette: "Hapus area terpilih" (`Delete`) — e2e: drag marquee →
+  marching ants tampil; stroke brush di luar seleksi tak mengubah piksel;
+  `Delete` membersihkan isi, `Ctrl+Z` mengembalikan.
 - Tool rail 48 px §7.4; options bar 40 px §7.5; dock 280 px + timeline dock 200 px,
   resize & persist per proyek §8.2; command palette `Ctrl+K` §7.10; hover, shortcut
   penuh, dense (§1.5); `Tab` mode fokus; HiDPI logical px.

@@ -27,18 +27,28 @@ const ACTIVE_STRIP_PX: f32 = 2.0;
 /// Jarak isi kotak warna ke tepi slot — swatch 32 px di slot 40 px.
 const KOTAK_PAD_PX: f32 = 4.0;
 
-/// Tool yang tersedia di M2 (§12.2 — tool: brush, eraser, fill, eyedropper).
+/// Tool yang tersedia (M2: brush/eraser/fill/eyedropper; M4d: marquee —
+/// lasso & wand menyusul, §12.2 toolset lanjutan).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
     Brush,
     Eraser,
     Fill,
     Eyedropper,
+    /// Seleksi persegi (M4d) — drag membentuk marching ants; klik polos
+    /// menghapus seleksi.
+    Marquee,
 }
 
 impl Tool {
     /// Urutan item di rail §7.4.
-    pub const ALL: [Tool; 4] = [Self::Brush, Self::Eraser, Self::Fill, Self::Eyedropper];
+    pub const ALL: [Tool; 5] = [
+        Self::Brush,
+        Self::Eraser,
+        Self::Fill,
+        Self::Eyedropper,
+        Self::Marquee,
+    ];
 
     /// Ikon tool (§5).
     pub const fn icon(self) -> Icon {
@@ -47,6 +57,7 @@ impl Tool {
             Self::Eraser => Icon::Eraser,
             Self::Fill => Icon::Fill,
             Self::Eyedropper => Icon::Eyedropper,
+            Self::Marquee => Icon::Marquee,
         }
     }
 
@@ -57,6 +68,7 @@ impl Tool {
             Self::Eraser => "Eraser",
             Self::Fill => "Fill",
             Self::Eyedropper => "Eyedropper",
+            Self::Marquee => "Marquee",
         }
     }
 
@@ -67,6 +79,7 @@ impl Tool {
             Self::Eraser => Key::E,
             Self::Fill => Key::G,
             Self::Eyedropper => Key::I,
+            Self::Marquee => Key::M,
         }
     }
 
@@ -77,7 +90,14 @@ impl Tool {
             Self::Eraser => "E",
             Self::Fill => "G",
             Self::Eyedropper => "I",
+            Self::Marquee => "M",
         }
+    }
+
+    /// `true` bila tool keluarga seleksi (M4d: marquee/lasso/wand) — rail
+    /// mengelompokkannya di balik divider §7.4.
+    pub const fn is_seleksi(self) -> bool {
+        matches!(self, Self::Marquee)
     }
 
     /// Label tooltip: `"Brush (B)"` (§7.9).
@@ -114,7 +134,17 @@ pub fn show(ui: &mut Ui, theme: &Theme, current: Tool, warna: Rgba) -> RailOutco
         ui.add_space(spacing::GAP_CONTROL);
         divider_grup(ui, theme);
         ui.add_space(spacing::GAP_CONTROL);
+        // Grup seleksi (M4d) di balik divider sendiri (§7.4: grup
+        // dipisah divider); tool gambar dulu, baru tool seleksi.
+        let mut grup_sebelum: Option<bool> = None;
         for tool in Tool::ALL {
+            let seleksi = tool.is_seleksi();
+            if grup_sebelum == Some(false) && seleksi {
+                ui.add_space(spacing::GAP_CONTROL);
+                divider_grup(ui, theme);
+                ui.add_space(spacing::GAP_CONTROL);
+            }
+            grup_sebelum = Some(seleksi);
             let response = icon::icon_button_sized(
                 ui,
                 theme,
@@ -123,7 +153,9 @@ pub fn show(ui: &mut Ui, theme: &Theme, current: Tool, warna: Rgba) -> RailOutco
                 tool == current,
                 ITEM_PX,
             );
-            if response.clicked() {
+            // §9: aktivasi `Enter`/`Space` = klik (terdaftar tab order di
+            // `icon_button_sized`).
+            if icon::teraktivasi(ui, &response) {
                 selected = tool;
             }
             if tool == current {

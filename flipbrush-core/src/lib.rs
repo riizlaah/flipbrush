@@ -13,6 +13,10 @@ pub mod flip;
 /// Inti stroke M2: bitmap RGBA8, kuas, penghapus, fill, undo/redo.
 pub mod raster;
 
+/// Model seleksi piksel M4d: geometri marquee/lasso/wand untuk clipping
+/// operasi gambar (DESIGN.md §12.2 toolset lanjutan).
+pub mod seleksi;
+
 /// Ekstensi berkas proyek Flipbrush (DESIGN.md §1).
 pub const PROJECT_EXTENSION: &str = "flip";
 

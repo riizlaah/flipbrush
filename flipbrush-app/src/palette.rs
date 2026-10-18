@@ -46,6 +46,8 @@ pub enum Aksi {
     Tab(PanelTab),
     /// Putar / jeda playback timeline (§7.7).
     PutarJeda,
+    /// Hapus isi area seleksi (`Delete`, M4d).
+    HapusSeleksi,
 }
 
 /// State palette — transien, tidak dipersist (§12.2).
@@ -161,6 +163,12 @@ fn daftar(recent: &[Tool], playing: bool) -> Vec<Entri> {
         None,
         "Playback",
         Aksi::PutarJeda,
+    ));
+    e.push(Entri::baru(
+        "Hapus area terpilih",
+        Some("Delete"),
+        "Umum",
+        Aksi::HapusSeleksi,
     ));
     // §7.10 "file recent": daftar berkas menyusul bersama M5 — grup
     // disembunyikan selama daftarnya masih kosong.
@@ -412,9 +420,11 @@ mod tests {
             "Brush",
             "Eraser",
             "Fill",
+            "Marquee", // M4d: tool seleksi masuk daftar otomatis
             "Urungkan",
             "Ulangi",
             "Mode fokus",
+            "Hapus area terpilih", // Delete — hapus isi seleksi (M4d)
             "Panel Color",
             "Panel Brush",
             "Panel Layers",
@@ -439,9 +449,9 @@ mod tests {
         for tool in Tool::ALL {
             p.catat_tool(tool);
         }
-        // Tak ada tool kelima — riwayat = semua tool unik terakhir.
+        // Tak ada tool keenam — riwayat = semua tool unik terakhir.
         assert_eq!(p.recent.len(), Tool::ALL.len());
-        assert_eq!(p.recent[0], Tool::Eyedropper);
+        assert_eq!(p.recent[0], Tool::Marquee, "terakhir dicatat = terdepan");
     }
 
     #[test]
