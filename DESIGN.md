@@ -230,6 +230,9 @@ disuspend). Ukuran kontrol: mobile **44 px** minimum (touch target), desktop **2
 ### 7.4 Tool rail (desktop — M4)
 
 - Lebar 48 px, kiri, `bg/surface-1`, item 40×40 px.
+- Kepala rail: kotak warna aktif (isi = warna aktif, tanpa kode hex —
+  angka jelas tetap di input panel Color §1.4) — klik = tampilkan tab
+  Color di dock kanan.
 - Item aktif: `ghost-active` + strip aksen 2 px di tepi kiri rail.
 - Grup dipisah divider `border/default`; tool dengan submenu panah kecil.
 
@@ -514,6 +517,12 @@ M5/M6)*
   persist `~/.config/flipbrush/swatches.json` (pendamping layout), harmony mode
   ikut `layout.json` — verifikasi e2e: roda/hex/harmony sinkron dua arah, simpan
   + pilih + hapus swatch, kill → restore tab & harmony & swatch.
+- *(M4 — penyesuaian UI)* kotak warna aktif pindah ke kepala tool rail §7.4
+  (klik = tampilkan tab Color di dock §7.6 — dock collapse ikut dibuka; tanpa
+  kode hex — angka jelas tetap di input panel Color §1.4; grup dipisah divider
+  §7.4), opsi bar §7.5 dilepas dari swatch+hex, dan roda/strip Color
+  ditengahkan (padding simetris — tak mepet tepi panel); e2e: klik kotak rail →
+  tab Color + un-collapse, roda sejajar tengah panel.
 - Tool rail 48 px §7.4; options bar 40 px §7.5; dock 280 px + timeline dock 200 px,
   resize & persist per proyek §8.2; command palette `Ctrl+K` §7.10; hover, shortcut
   penuh, dense (§1.5); `Tab` mode fokus; HiDPI logical px.

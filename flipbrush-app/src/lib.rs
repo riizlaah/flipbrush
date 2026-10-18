@@ -184,7 +184,13 @@ impl FlipbrushApp {
             .resizable(false)
             .frame(egui::Frame::NONE.fill(self.theme.surface_1))
             .show(ui, |ui| {
-                self.tool = tool::show(ui, &self.theme, self.tool);
+                let hasil = tool::show(ui, &self.theme, self.tool, self.color);
+                self.tool = hasil.tool;
+                if hasil.warna_diklik {
+                    // §7.3/§7.6: kotak warna → tampilkan tab Color di
+                    // dock kanan (dock collapse ikut dibuka).
+                    self.dock.buka_tab(dock::PanelTab::Color);
+                }
             });
 
         // §7.5: options bar 40 px di atas kanvas (kontrol tool aktif).
@@ -237,7 +243,8 @@ impl FlipbrushApp {
         self.recovery_dialog(ui.ctx());
     }
 
-    /// Isi options bar §7.5: kontrol spesifik tool + swatch warna kanan.
+    /// Isi options bar §7.5: kontrol spesifik tool aktif. (Swatch warna
+    /// pindah ke kepala tool rail §7.4 — lihat `tool::show`.)
     fn options_bar(&mut self, ui: &mut egui::Ui) {
         let theme = self.theme.clone();
         ui.add_space(theme::spacing::GRID);
@@ -281,36 +288,6 @@ impl FlipbrushApp {
                     );
                 }
             }
-
-            // Kanan bar: swatch warna aktif + hex (§1.4 presisi — angka jelas).
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let (rect, _) =
-                    ui.allocate_exact_size(egui::Vec2::splat(20.0), egui::Sense::hover());
-                ui.painter().rect_filled(
-                    rect,
-                    theme::radius::SM,
-                    egui::Color32::from_rgba_unmultiplied(
-                        self.color.r,
-                        self.color.g,
-                        self.color.b,
-                        self.color.a,
-                    ),
-                );
-                ui.painter().rect_stroke(
-                    rect,
-                    egui::CornerRadius::same(theme::radius::SM),
-                    egui::Stroke::new(1.0, theme.border_strong),
-                    egui::epaint::StrokeKind::Middle,
-                );
-                ui.label(
-                    Type::Numeric
-                        .rich(format!(
-                            "#{:02X}{:02X}{:02X}",
-                            self.color.r, self.color.g, self.color.b
-                        ))
-                        .color(theme.text_secondary),
-                );
-            });
         });
     }
 
@@ -755,6 +732,31 @@ mod tests {
             frame(&mut app, &ctx, vec![key(k, Modifiers::NONE)]);
             assert_eq!(app.tool, expected, "shortcut {k:?}");
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // M4 — kotak warna di kepala tool rail §7.4 (tanpa hex, klik = tab Color)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn kotak_warna_rail_membuka_tab_color() {
+        let mut app = test_app();
+        let ctx = test_ctx();
+        // Rail 48 px (tengah x = 24): top pad GAP_CONTROL + setengah slot.
+        let titik = pos2(tool::RAIL_W * 0.5, theme::spacing::GAP_CONTROL + 20.0);
+
+        app.dock.tab = dock::PanelTab::Brush;
+        frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, titik);
+        assert_eq!(app.dock.tab, dock::PanelTab::Color);
+
+        // Dock yang sedang di-collapse ikut dibuka (§7.6).
+        app.dock.tab = dock::PanelTab::Brush;
+        app.dock.collapsed = true;
+        frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, titik);
+        assert_eq!(app.dock.tab, dock::PanelTab::Color);
+        assert!(!app.dock.collapsed);
     }
 
     #[test]

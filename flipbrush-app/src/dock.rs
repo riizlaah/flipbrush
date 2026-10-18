@@ -188,6 +188,16 @@ impl Dock {
     pub fn flush(&mut self) {
         self.persist();
     }
+
+    /// Tampilkan `tab` dari luar dock (mis. klik kotak warna di kepala
+    /// tool rail §7.4 → tab Color §7.3): header yang sedang di-collapse
+    /// dibuka lagi agar panel benar-benar terlihat; tandai `dirty` supaya
+    /// pilihan tab ikut persist (§8.2).
+    pub fn buka_tab(&mut self, tab: PanelTab) {
+        self.tab = tab;
+        self.collapsed = false;
+        self.dirty = true;
+    }
 }
 
 impl Drop for Dock {

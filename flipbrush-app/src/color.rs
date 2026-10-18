@@ -289,9 +289,11 @@ pub fn show(
 ) -> bool {
     let mut harmony_berubah = false;
     ui.add_space(theme::spacing::GAP_CONTROL);
-    roda(ui, theme, color_ui, warna);
+    // Roda & strip ditengahkan horizontal — jangan mepet tepi kiri panel;
+    // padding simetris di segala lebar dock (min 220 px §8.2).
+    ui.vertical_centered(|ui| roda(ui, theme, color_ui, warna));
     ui.add_space(theme::spacing::GAP_CONTROL);
-    strip_lightness(ui, theme, warna);
+    ui.vertical_centered(|ui| strip_lightness(ui, theme, warna));
     ui.add_space(theme::spacing::LIST);
     input_hex_rgb(ui, theme, color_ui, warna);
     ui.add_space(theme::spacing::LIST);
