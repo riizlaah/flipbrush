@@ -499,6 +499,13 @@ playback+onion, tahap 3 `.flip`+autosave)*
 **M4 — UI desktop lengkap** *(fase terbesar; boleh dipecah M4a/M4b tanpa menggeser
 M5/M6)*
 
+- *(M4a selesai)* dock kanan 280 px (resize 220–460 px) + tab Color/Brush/Layers
+  §7.6, header collapse + menu ⋮ §7.8, panel Brush (§7.2) & Layers (visibilitas,
+  nama inline, pilih, tambah/hapus/geser, opasitas), empty state Color §7.11;
+  layout persist `~/.config/flipbrush/layout.json` — verifikasi e2e: resize +
+  collapse + tab → kill → restore. *(Peran sesi — keying per proyek menyusul
+  bersama settings §10; aksi layer memicu autosave §13.2 — terverifikasi
+  pemulihan `kill -9` membawa layer hasil aksi panel.)*
 - Tool rail 48 px §7.4; options bar 40 px §7.5; dock 280 px + timeline dock 200 px,
   resize & persist per proyek §8.2; command palette `Ctrl+K` §7.10; hover, shortcut
   penuh, dense (§1.5); `Tab` mode fokus; HiDPI logical px.

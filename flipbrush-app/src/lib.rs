@@ -14,8 +14,12 @@
 //! M3 tahap 3 (§12.2, §13.2): format `.flip` (simpan/buka — `project`),
 //! autosave background 30 dtk setelah perubahan terakhir, dan dialog
 //! pemulihan startup (token `warning` §2.2).
+//! M4a (§12.2): dock kanan §7.6/§8.2 — tab Color/Brush/Layers, resize
+//! 220–460 px, collapse header, menu ⋮, dan layout persist antar sesi
+//! (`dock`).
 
 pub mod canvas;
+pub mod dock;
 pub mod icon;
 pub mod project;
 pub mod slider;
@@ -34,6 +38,7 @@ use flipbrush_core::{
 };
 
 use canvas::Canvas;
+use dock::Dock;
 use theme::Theme;
 use timeline::Timeline;
 use tool::Tool;
@@ -70,6 +75,8 @@ pub struct FlipbrushApp {
     timeline: Timeline,
     /// Kanvas + viewport + riwayat (§12.2 M2/M3).
     canvas: Canvas,
+    /// Dock kanan (§7.6/§8.2): tab panel + layout persist antar sesi.
+    dock: Dock,
     /// Persistensi `.flip`: file utama, autosave, pemulihan (§13.2).
     project: project::State,
 }
@@ -118,6 +125,8 @@ impl FlipbrushApp {
             anim: Animation::new(DEFAULT_CANVAS, DEFAULT_CANVAS),
             timeline: Timeline::default(),
             canvas: Canvas::new(DEFAULT_CANVAS, DEFAULT_CANVAS),
+            // §8.2: layout dock restore antar sesi (`~/.config`).
+            dock: Dock::load(),
             // §13.2: deteksi autosave pemulihan + thread autosave 30 dtk.
             project: project::State::new(project::data_dir(), project::AUTOSAVE_DELAY),
         }
@@ -178,6 +187,26 @@ impl FlipbrushApp {
             .show(ui, |ui| {
                 self.options_bar(ui);
             });
+
+        // §7.6/§8.2: dock kanan (tab Color/Brush/Layers, lebar bisa
+        // di-resize, layout persist antar sesi). Perubahan konten layer →
+        // autosave §13.2; menu "Sembunyikan dock" → mode fokus §8.2.
+        let outcome = dock::show(
+            ui,
+            &self.theme,
+            &mut self.dock,
+            dock::PanelState {
+                anim: &mut self.anim,
+                timeline: &mut self.timeline,
+                brush: &mut self.brush,
+            },
+        );
+        if outcome.content_changed {
+            self.project.mark_changed();
+        }
+        if outcome.enter_focus {
+            self.focus_mode = true;
+        }
 
         // §8.2: timeline dock 200 px di bawah kanvas (grid X-sheet §7.7).
         egui::Panel::bottom("timeline")
@@ -542,6 +571,8 @@ mod tests {
             anim: Animation::new(DEFAULT_CANVAS, DEFAULT_CANVAS),
             timeline: Timeline::default(),
             canvas: Canvas::new(DEFAULT_CANVAS, DEFAULT_CANVAS),
+            // Folder temp — tes tak boleh menyentuh `~/.config` (§8.2).
+            dock: Dock::load_from(&temp_dir("layout").join("layout.json")),
             project: project::State::new(temp_dir("app"), std::time::Duration::from_secs(3600)),
         }
     }
@@ -1024,11 +1055,12 @@ mod tests {
         pos2(x + 16.0, SCREEN[1] - timeline::TIMELINE_H + 16.0)
     }
 
-    /// Posisi tengah toggle onion — ujung kanan transport: `add_space(PANEL)`
-    /// + tombol 32 px dari tepi kanan layar (RTL).
+    /// Posisi tengah toggle onion — ujung kanan transport (RTL): `PANEL`
+    /// dari tepi kanan area timeline, lalu tombol 32 px. Dock kanan 280 px
+    /// (§8.2) memangkas lebar timeline.
     fn onion_btn() -> Pos2 {
         pos2(
-            SCREEN[0] - theme::spacing::PANEL - 16.0,
+            SCREEN[0] - dock::DOCK_W - theme::spacing::PANEL - 16.0,
             SCREEN[1] - timeline::TIMELINE_H + 16.0,
         )
     }

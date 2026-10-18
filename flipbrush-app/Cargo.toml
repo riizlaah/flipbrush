@@ -21,6 +21,10 @@ egui.workspace = true
 flipbrush-core.workspace = true
 flipbrush-platform.workspace = true
 log.workspace = true
+# Persistensi layout dock §8.2 (`layout.json`) — serde untuk format yang
+# toleran field hilang/asing (wajib mundur-maju antar versi).
+serde.workspace = true
+serde_json.workspace = true
 
 # a11y (DESIGN.md §9): eframe 0.36 hanya mengizinkan `accesskit` di luar
 # Android (native-activity). Non-Android: dukungan screen reader desktop.

@@ -135,6 +135,12 @@ impl Animation {
         self.layers.iter().position(|layer| layer.id == id)
     }
 
+    /// Layer berdasarkan ID — panel Layers (§7.6) mengubah nama/visibilitas/
+    /// opasitas tanpa mengandalkan indeks yang bisa bergeser.
+    pub fn layer_mut(&mut self, id: LayerId) -> Option<&mut Layer> {
+        self.layers.iter_mut().find(|layer| layer.id == id)
+    }
+
     /// Tambah layer baru di posisi paling atas (setelah layer default yang
     /// sudah ada). `Err` bila sudah [`MAX_LAYERS`] (§13.3).
     pub fn add_layer(&mut self, name: impl Into<String>) -> Result<LayerId, usize> {
@@ -154,6 +160,24 @@ impl Animation {
             },
         );
         Ok(id)
+    }
+
+    /// Geser layer ke indeks `to_index` (reorder panel Layers §7.6). Exposure
+    /// merujuk ID layer — aman digeser; cel tidak ikut berubah. `false` bila
+    /// id tak dikenal, tujuan di luar rentang, atau sudah berada di sana.
+    pub fn move_layer(&mut self, id: LayerId, to_index: usize) -> bool {
+        if to_index >= self.layers.len() {
+            return false;
+        }
+        let Some(from) = self.layer_index(id) else {
+            return false;
+        };
+        if from == to_index {
+            return false;
+        }
+        let layer = self.layers.remove(from);
+        self.layers.insert(to_index, layer);
+        true
     }
 
     /// Hapus layer beserta exposure-nya; cel yang tak lagi dirujuk exposure
@@ -600,6 +624,63 @@ mod tests {
             !anim.remove_layer(keep),
             "layer terakhir tidak bisa dihapus"
         );
+    }
+
+    #[test]
+    fn layer_mut_mengubah_tanpa_indeks() {
+        let mut anim = Animation::new(8, 8);
+        let id = anim.layer_id(0).unwrap();
+
+        let layer = anim.layer_mut(id).expect("layer ada");
+        layer.name = "Diganti".into();
+        layer.visible = false;
+        layer.opacity = 0.5;
+
+        let layer = anim.layer_mut(id).unwrap();
+        assert_eq!(layer.name, "Diganti");
+        assert!(!layer.visible);
+        assert_eq!(layer.opacity, 0.5);
+        assert!(anim.layer_mut(999).is_none(), "id tak dikenal");
+    }
+
+    #[test]
+    fn move_layer_menggeser_urutan_z() {
+        let mut anim = Animation::new(8, 8);
+        let a = anim.layer_id(0).unwrap();
+        let b = anim.add_layer("B").unwrap();
+        let c = anim.add_layer("C").unwrap();
+        let urut = |anim: &Animation| {
+            anim.layers()
+                .iter()
+                .map(|l| (l.id, l.name.clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            urut(&anim),
+            vec![
+                (c, "C".to_owned()),
+                (b, "B".to_owned()),
+                (a, "Layer 1".to_owned())
+            ],
+            "posisi awal: C paling atas"
+        );
+
+        assert!(anim.move_layer(c, 2), "geser C ke dasar");
+        assert_eq!(
+            urut(&anim),
+            vec![
+                (b, "B".to_owned()),
+                (a, "Layer 1".to_owned()),
+                (c, "C".to_owned())
+            ],
+            "urutan Z berubah; ID ikut berpindah (exposure tetap sah)"
+        );
+        assert!(anim.move_layer(c, 0), "kembalikan C ke atas");
+        assert_eq!(urut(&anim).first().map(|(id, _)| *id), Some(c));
+
+        assert!(!anim.move_layer(c, 0), "sudah berada di tujuan");
+        assert!(!anim.move_layer(c, 3), "tujuan di luar rentang");
+        assert!(!anim.move_layer(999, 1), "id tak dikenal");
     }
 
     #[test]

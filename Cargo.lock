@@ -1173,6 +1173,8 @@ dependencies = [
  "flipbrush-core",
  "flipbrush-platform",
  "log",
+ "serde",
+ "serde_json",
  "usvg",
  "winit",
 ]
