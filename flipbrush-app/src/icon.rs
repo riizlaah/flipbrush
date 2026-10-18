@@ -9,7 +9,7 @@
 //! `accent/brand` saat aktif; `text/disabled` bila nonaktif.
 
 use eframe::egui::{
-    self, Color32, CornerRadius, Painter, Pos2, Rect, Response, Stroke, Ui, Vec2,
+    self, Color32, CornerRadius, Key, Painter, Pos2, Rect, Response, Stroke, Ui, Vec2,
     epaint::{PathShape, PathStroke, StrokeKind},
 };
 
@@ -85,6 +85,10 @@ pub fn icon_button_sized(
     // §5: ikon 20 px; proporsional bila tombol dikecilkan/dibesarkan.
     let icon_px = (button_px * 0.625).clamp(12.0, ICON_PX);
     let response = ui.add_sized(Vec2::splat(button_px), button);
+    // §9: ikut tab order — `Tab`/`Shift+Tab` berpindah antar tombol ikon;
+    // aktivasi keyboard lewat [`teraktivasi`] (fokus ring di bawah).
+    ui.ctx()
+        .memory_mut(|m| m.interested_in_focus(response.id, response.layer_id));
 
     let icon_color = if !response.enabled() {
         theme.text_disabled
@@ -117,6 +121,15 @@ pub fn icon_button_sized(
         node.set_label(name);
     });
     response
+}
+
+/// §9: aktivasi keyboard — `true` bila diklik pointer ATAU `Enter`/`Space`
+/// saat tombol berfokus keyboard (tombol egui tak punya aktivasi bawaan;
+/// fokus sendiri datang dari tab order — lihat `icon_button_sized`).
+pub fn teraktivasi(ui: &Ui, response: &Response) -> bool {
+    response.clicked()
+        || (response.has_focus()
+            && ui.input(|i| i.key_pressed(Key::Enter) || i.key_pressed(Key::Space)))
 }
 
 #[cfg(test)]

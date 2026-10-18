@@ -197,9 +197,10 @@ impl Timeline {
             ui.horizontal(|ui| {
                 ui.add_space(theme::spacing::PANEL);
                 ui.spacing_mut().item_spacing.x = theme::spacing::GAP_CONTROL;
-                if icon::icon_button(ui, theme, Icon::PrevFrame, "Frame sebelumnya", false)
-                    .clicked()
-                {
+                // §9: tombol transport ikut tab order (didftar di
+                // `icon_button_sized`); `Enter`/`Space` = klik keyboard.
+                let resp = icon::icon_button(ui, theme, Icon::PrevFrame, "Frame sebelumnya", false);
+                if icon::teraktivasi(ui, &resp) {
                     self.frame = self.frame.saturating_sub(1);
                 }
                 let play_icon = if self.playing {
@@ -208,13 +209,13 @@ impl Timeline {
                     Icon::Play
                 };
                 let play_name = if self.playing { "Jeda" } else { "Putar" };
-                if icon::icon_button(ui, theme, play_icon, play_name, self.playing).clicked() {
+                let resp = icon::icon_button(ui, theme, play_icon, play_name, self.playing);
+                if icon::teraktivasi(ui, &resp) {
                     self.playing = !self.playing;
                     self.play_acc = 0.0;
                 }
-                if icon::icon_button(ui, theme, Icon::NextFrame, "Frame berikutnya", false)
-                    .clicked()
-                {
+                let resp = icon::icon_button(ui, theme, Icon::NextFrame, "Frame berikutnya", false);
+                if icon::teraktivasi(ui, &resp) {
                     self.frame = (self.frame + 1).min(max_frame);
                 }
                 ui.label(
@@ -230,8 +231,8 @@ impl Timeline {
                 // Toggle onion skin (§2.3) — menempel di ujung kanan transport.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add_space(theme::spacing::PANEL);
-                    if icon::icon_button(ui, theme, Icon::Onion, "Onion skin", self.onion).clicked()
-                    {
+                    let resp = icon::icon_button(ui, theme, Icon::Onion, "Onion skin", self.onion);
+                    if icon::teraktivasi(ui, &resp) {
                         self.onion = !self.onion;
                     }
                 });

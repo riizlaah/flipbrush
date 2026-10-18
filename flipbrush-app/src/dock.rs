@@ -331,7 +331,20 @@ fn show_tabs(
                 .stroke(Stroke::NONE)
                 .corner_radius(CornerRadius::ZERO);
             let resp = ui.add(tombol);
-            if resp.clicked() && !aktif {
+            // §9: tab ikut tab order + focus ring; `Enter`/`Space`
+            // mengaktifkan (`icon::teraktivasi`).
+            ui.ctx()
+                .memory_mut(|m| m.interested_in_focus(resp.id, resp.layer_id));
+            if resp.has_focus() {
+                let grow = theme.focus_ring_offset + theme.focus_ring.width * 0.5;
+                ui.painter().rect_stroke(
+                    resp.rect.expand(grow),
+                    CornerRadius::same(theme::radius::SM),
+                    theme.focus_ring,
+                    egui::epaint::StrokeKind::Middle,
+                );
+            }
+            if icon::teraktivasi(ui, &resp) && !aktif {
                 // Penamaan inline yang terputus → komit (lihat `finish_renaming`).
                 finish_renaming(dock, anim, outcome);
                 dock.tab = tab;
@@ -378,7 +391,11 @@ fn show_header(
                 |painter, rect, warna| chevron(painter, rect, warna, arah),
                 "Ciutkan panel",
             );
-            if resp.clicked() {
+            // §9: chevron ikut tab order (focus ring sudah digambar
+            // `tombol_glyph`); `Enter`/`Space` mengaktifkan.
+            ui.ctx()
+                .memory_mut(|m| m.interested_in_focus(resp.id, resp.layer_id));
+            if icon::teraktivasi(ui, &resp) {
                 finish_renaming(dock, anim, outcome);
                 dock.collapsed = !dock.collapsed;
                 dock.dirty = true;
@@ -595,13 +612,14 @@ fn layers_panel(
     // Aksi baris — tombol ikon §5 (layer-add/layer-delete) + reorder chevron.
     ui.horizontal(|ui| {
         ui.add_space(theme::spacing::GAP_CONTROL);
-        if icon::icon_button(ui, theme, Icon::LayerAdd, "Tambah layer", false).clicked()
-            && anim.layers().len() < MAX_LAYERS
-        {
+        // §9: tombol ikon ikut tab order (didftar di `icon_button_sized`);
+        // `Enter`/`Space` mengaktifkan — sama seperti klik pointer.
+        let tambah = icon::icon_button(ui, theme, Icon::LayerAdd, "Tambah layer", false);
+        if icon::teraktivasi(ui, &tambah) && anim.layers().len() < MAX_LAYERS {
             aksi_tambah(anim, timeline, outcome);
         }
-        if icon::icon_button(ui, theme, Icon::LayerDelete, "Hapus layer terpilih", false).clicked()
-        {
+        let hapus = icon::icon_button(ui, theme, Icon::LayerDelete, "Hapus layer terpilih", false);
+        if icon::teraktivasi(ui, &hapus) {
             aksi_hapus(anim, timeline, outcome);
         }
         let bisa_naik = anim
@@ -614,7 +632,13 @@ fn layers_panel(
             |painter, rect, warna| chevron(painter, rect, warna, Arah::Atas),
             "Naikkan layer",
         );
-        if resp.clicked() {
+        if bisa_naik {
+            // §9: hanya chevron aktif yang masuk tab order (nonaktif =
+            // tak bisa difokus, konsisten dengan tampilan disabled).
+            ui.ctx()
+                .memory_mut(|m| m.interested_in_focus(resp.id, resp.layer_id));
+        }
+        if bisa_naik && icon::teraktivasi(ui, &resp) {
             aksi_geser(anim, timeline, -1, outcome);
         }
         let bisa_turun = anim.layer_id(timeline.layer).is_some_and(|id| {
@@ -628,7 +652,11 @@ fn layers_panel(
             |painter, rect, warna| chevron(painter, rect, warna, Arah::Bawah),
             "Turunkan layer",
         );
-        if resp.clicked() {
+        if bisa_turun {
+            ui.ctx()
+                .memory_mut(|m| m.interested_in_focus(resp.id, resp.layer_id));
+        }
+        if bisa_turun && icon::teraktivasi(ui, &resp) {
             aksi_geser(anim, timeline, 1, outcome);
         }
     });

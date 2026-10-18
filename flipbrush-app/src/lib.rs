@@ -20,6 +20,10 @@
 //! M4c tahap 1 (§12.2): command palette `Ctrl+K` §7.10 (`palette`) —
 //! semua command + recent tools sesi, filter, ↑/↓ Enter Esc, empty state
 //! §7.11; modal egui memblokir input di bawahnya.
+//! M4c tahap 2 (§12.2, §9): keyboard nav — `Tab` (saklar mode fokus §8.2
+//! vs tab order saat widget berfokus), `Esc` keluar mode fokus, tombol ikon,
+//! tab dock, chevron, dan kotak warna punya fokus keyboard & aktivasi
+//! `Enter`/`Space` (`icon::teraktivasi`).
 
 pub mod canvas;
 pub mod color;
@@ -478,9 +482,14 @@ impl FlipbrushApp {
 
     /// Shortcut desktop §12.2: tool `B/E/G/I`, undo `Ctrl+Z`, redo
     /// `Ctrl+Shift+Z`, mode fokus `Tab` (§8.2), command palette `Ctrl+K`
-    /// (§7.10). Dikonsumsi hanya bila tidak sedang mengetik (agar edit
-    /// nilai §7.2 tidak terganggu); saat palette terbuka semua shortcut
-    /// lain dibekukan — hanya `Ctrl+K` yang menutupnya kembali.
+    /// (§7.10), `Esc` menutup mode fokus (§9: Esc selalu menutup).
+    /// Dikonsumsi hanya bila tidak sedang mengetik (agar edit nilai §7.2
+    /// tidak terganggu); saat palette terbuka semua shortcut lain
+    /// dibekukan — hanya `Ctrl+K` yang menutupnya kembali.
+    ///
+    /// `Tab` dipecah dua peran (§8.2 vs §9): tanpa widget berfokus =
+    /// saklar mode fokus; dengan widget berfokus = diserahkan egui untuk
+    /// tab order (fokus berpindah ke kontrol berikutnya).
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         if self.palette.open {
             // `text_edit_focused` sengaja tidak dicek: kombinasi harus
@@ -497,9 +506,22 @@ impl FlipbrushApp {
             self.palette.buka();
             return;
         }
+        // §9: `Esc` menutup mode fokus (rename/edit nilai yang memegang
+        // fokus teks hanya mungkin di luar mode fokus — chrome tersembunyi
+        // di dalamnya).
+        if self.focus_mode
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.focus_mode = false;
+            return;
+        }
         if ctx.text_edit_focused() {
             return;
         }
+        // §8.2 vs §9: `Tab` = saklar mode fokus hanya bila tak ada widget
+        // berfokus keyboard; bila sudah ada (mis. setelah menyorot slider),
+        // `Tab` dibiarkan egui untuk tab order §9.
+        let punya_fokus = ctx.memory(|m| m.focused().is_some());
         let (switch, undo, redo, focus) = ctx.input_mut(|i| {
             let switch = Tool::ALL
                 .into_iter()
@@ -508,7 +530,7 @@ impl FlipbrushApp {
             // combo +Shift dicek sebelum combo polos.
             let redo = i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::Z);
             let undo = i.consume_key(egui::Modifiers::CTRL, egui::Key::Z);
-            let focus = i.consume_key(egui::Modifiers::NONE, egui::Key::Tab);
+            let focus = !punya_fokus && i.consume_key(egui::Modifiers::NONE, egui::Key::Tab);
             (switch, undo, redo, focus)
         });
         if let Some(tool) = switch {
@@ -523,6 +545,10 @@ impl FlipbrushApp {
         }
         if focus {
             self.focus_mode = !self.focus_mode;
+            // `Tab` sudah ditandai egui sebagai perintah traversal sejak
+            // awal pass — arah dibersihkan agar widget pertama tidak ikut
+            // merebut fokus keyboard saat chrome sedang beralih (§9).
+            ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
         }
     }
 }
@@ -888,6 +914,53 @@ mod tests {
         // Recent tools §7.10 — riwayat sesi, terbaru di depan.
         frame(&mut app, &ctx, vec![]);
         assert_eq!(app.palette.recent(), &[Tool::Eyedropper]);
+    }
+
+    // -------------------------------------------------------------------------
+    // M4c tahap 2 — keyboard nav §9 (Tab §8.2, Esc menutup, aktivasi Enter)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn tab_tanpa_fokus_widget_saklar_mode_fokus_lalu_esc() {
+        let mut app = test_app();
+        let ctx = test_ctx();
+
+        // Tanpa widget berfokus: `Tab` = saklar mode fokus (§8.2).
+        frame(&mut app, &ctx, vec![key(egui::Key::Tab, Modifiers::NONE)]);
+        assert!(app.focus_mode);
+        // §9: `Esc` menutup mode fokus kembali.
+        frame(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Escape, Modifiers::NONE)],
+        );
+        assert!(!app.focus_mode);
+    }
+
+    #[test]
+    fn tab_dengan_widget_berfokus_masuk_tab_order_bukan_saklar() {
+        let mut app = test_app();
+        let ctx = test_ctx();
+
+        // Sorot widget keyboard (tab order §9) lalu `Tab` — bukan saklar.
+        ctx.memory_mut(|m| m.request_focus(egui::Id::new("kotak-warna")));
+        frame(&mut app, &ctx, vec![key(egui::Key::Tab, Modifiers::NONE)]);
+        assert!(
+            !app.focus_mode,
+            "`Tab` dengan widget berfokus = tab order §9, bukan mode fokus"
+        );
+    }
+
+    #[test]
+    fn kotak_warna_diaktifkan_enter_saat_berfokus() {
+        let mut app = test_app();
+        let ctx = test_ctx();
+
+        // §9: fokus keyboard ke kotak warna (tab order) → `Enter`
+        // mengaktifkan seperti klik — tampilkan tab Color (§7.6).
+        ctx.memory_mut(|m| m.request_focus(egui::Id::new("kotak-warna")));
+        frame(&mut app, &ctx, vec![key(egui::Key::Enter, Modifiers::NONE)]);
+        assert_eq!(app.dock.tab, dock::PanelTab::Color);
     }
 
     #[test]

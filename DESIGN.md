@@ -532,6 +532,19 @@ M5/M6)*
   struktur — daftar berkas menyusul bersama M5 — e2e: `Ctrl+K` → ketik
   "panel layers" → `Enter` membuka tab Layers; query kosong hasil tetap
   terbuka; `Esc` menutup.
+- *(M4c tahap 2 selesai)* keyboard nav §9: `Tab` dipecah dua peran — tanpa
+  widget berfokus = saklar mode fokus §8.2 (arah traversal egui dibersihkan
+  `move_focus(None)` agar widget pertama tidak ikut merebut fokus), dengan
+  widget berfokus = tab order §9 (fokus berpindah antar kontrol); `Esc`
+  keluar dari mode fokus; tombol ikon (rail, transport, onion, tambah/hapus
+  layer) + tab dock + chevron header + kotak warna kini punya fokus keyboard
+  dengan aktivasi `Enter`/`Space` (`icon::teraktivasi`, focus ring mengikuti
+  tampilan); §7.9 terpetakan ke `tooltip_delay` 500 ms + `tooltip_grace_time`
+  egui (0,2 dtk) — "sudah pernah muncul → instan" = grace window; roda/strip/
+  swatch/harmony Color dan sel timeline tetap direkt-manipulasi pointer
+  (belum masuk tab order — penyempurnaan menyusul) — e2e: `Tab` → `Esc`
+  keluar fokus; klik slider lalu `Tab` berpindah kontrol; `Enter` pada kotak
+  warna berfokus membuka tab Color.
 - Tool rail 48 px §7.4; options bar 40 px §7.5; dock 280 px + timeline dock 200 px,
   resize & persist per proyek §8.2; command palette `Ctrl+K` §7.10; hover, shortcut
   penuh, dense (§1.5); `Tab` mode fokus; HiDPI logical px.

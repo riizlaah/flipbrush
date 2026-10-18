@@ -10,7 +10,8 @@
 //!   `B` brush, `E` eraser, `G` fill, `I` eyedropper.
 
 use eframe::egui::{
-    Color32, CornerRadius, Key, Rect, Response, Sense, Stroke, Ui, Vec2, epaint::StrokeKind, pos2,
+    Color32, CornerRadius, Id, Key, Rect, Response, Sense, Stroke, Ui, Vec2, epaint::StrokeKind,
+    pos2,
 };
 use flipbrush_core::raster::Rgba;
 
@@ -106,8 +107,10 @@ pub fn show(ui: &mut Ui, theme: &Theme, current: Tool, warna: Rgba) -> RailOutco
     ui.vertical_centered(|ui| {
         ui.add_space(spacing::GAP_CONTROL);
         // §7.4: grup terpisah — kotak warna di paling atas rail (§7.3:
-        // kotak warna aktif, klik = tampilkan tab Color di dock §7.6).
-        warna_diklik = kotak_warna(ui, theme, warna).clicked();
+        // kotak warna aktif, klik = tampilkan tab Color di dock §7.6);
+        // §9: `Enter`/`Space` mengaktifkan saat kotak berfokus keyboard.
+        let resp_warna = kotak_warna(ui, theme, warna);
+        warna_diklik = icon::teraktivasi(ui, &resp_warna);
         ui.add_space(spacing::GAP_CONTROL);
         divider_grup(ui, theme);
         ui.add_space(spacing::GAP_CONTROL);
@@ -150,7 +153,14 @@ pub fn show(ui: &mut Ui, theme: &Theme, current: Tool, warna: Rgba) -> RailOutco
 /// input panel Color). Klik = tampilkan tab Color di dock kanan (§7.6);
 /// tooltip §7.9, focus ring §9, accessible name §9.
 fn kotak_warna(ui: &mut Ui, theme: &Theme, warna: Rgba) -> Response {
-    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(ITEM_PX), Sense::click());
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(ITEM_PX), Sense::hover());
+    // Id global (tanpa prefiks rantai Ui): tab order §9 dan tes headless
+    // bisa menyasar kotak ini secara deterministik.
+    let resp = ui.interact(rect, Id::new("kotak-warna"), Sense::click());
+    // §9: ikut tab order — `Tab`/`Shift+Tab` berpindah ke sini; aktivasi
+    // `Enter`/`Space` lewat `icon::teraktivasi` (lihat `show`).
+    ui.ctx()
+        .memory_mut(|m| m.interested_in_focus(resp.id, resp.layer_id));
     let kotak = rect.shrink(KOTAK_PAD_PX);
     ui.painter().rect_filled(
         kotak,
