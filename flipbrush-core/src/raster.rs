@@ -434,6 +434,138 @@ impl Raster {
         }
         Some(FillResult { rect, before })
     }
+
+    /// Pindahkan piksel di dalam area seleksi ke offset `(dx, dy)` — tool
+    /// Move (M4d tahap 3). Area kotor = posisi lama ∪ posisi baru (untuk
+    /// undo utuh); piksel yang terdorong keluar kanvas dibuang.
+    pub fn geser_isi(&mut self, sel: &Seleksi, dx: i32, dy: i32) -> Option<FillResult> {
+        let lama = sel.rect().intersect(self.bounds());
+        if lama.is_empty() || (dx == 0 && dy == 0) {
+            return None;
+        }
+        let baru = Rect::from_points(
+            lama.x as i32 + dx,
+            lama.y as i32 + dy,
+            (lama.x + lama.w) as i32 + dx,
+            (lama.y + lama.h) as i32 + dy,
+        )
+        .intersect(self.bounds());
+        let luas = lama.union(baru);
+        if luas.is_empty() {
+            return None;
+        }
+        let before = RegionBuf::capture(self, luas);
+
+        // Salin isi terpilih dulu — baru tempatkan di posisi baru.
+        let mut salinan: Vec<(i32, i32, [u8; 4])> = Vec::new();
+        for y in lama.y..lama.y + lama.h {
+            for x in lama.x..lama.x + lama.w {
+                if !sel.contains(x as i32, y as i32) {
+                    continue;
+                }
+                let i = ((y * self.width + x) * 4) as usize;
+                salinan.push((
+                    x as i32,
+                    y as i32,
+                    [
+                        self.pixels[i],
+                        self.pixels[i + 1],
+                        self.pixels[i + 2],
+                        self.pixels[i + 3],
+                    ],
+                ));
+                self.pixels[i..i + 4].fill(0);
+            }
+        }
+        for (x, y, px) in salinan {
+            let (nx, ny) = (x + dx, y + dy);
+            if nx < 0 || ny < 0 || nx >= self.width as i32 || ny >= self.height as i32 {
+                continue;
+            }
+            let i = ((ny as u32 * self.width + nx as u32) * 4) as usize;
+            self.pixels[i..i + 4].copy_from_slice(&px);
+        }
+        Some(FillResult { rect: luas, before })
+    }
+
+    /// Rasterisasi bentuk terisi dari `rect` dokumen — tool Shape (M4d
+    /// tahap 3). `ellipse` memilih elips; tepi dihaluskan coverage per
+    /// piksel (SDF — tepi tak bergerigi, §6); `erase` = mode penghapus
+    /// (alpha keluar, RGB tak berubah) seperti [`Self::stamp`].
+    pub fn bentuk(
+        &mut self,
+        rect: Rect,
+        ellipse: bool,
+        color: Rgba,
+        opacity: f32,
+        erase: bool,
+    ) -> Option<FillResult> {
+        let opacity = opacity.clamp(0.0, 1.0);
+        if opacity <= 0.0 {
+            return None;
+        }
+        let area = rect.intersect(self.bounds());
+        if area.is_empty() {
+            return None;
+        }
+        let before = RegionBuf::capture(self, area);
+
+        // Pusat & setengah-ukuran dalam koordinat piksel.
+        let cx = rect.x as f32 + rect.w as f32 * 0.5;
+        let cy = rect.y as f32 + rect.h as f32 * 0.5;
+        let hw = rect.w as f32 * 0.5;
+        let hh = rect.h as f32 * 0.5;
+        let skala = hw.min(hh).max(0.5);
+
+        for y in area.y..area.y + area.h {
+            for x in area.x..area.x + area.w {
+                let px = x as f32 + 0.5 - cx;
+                let py = y as f32 + 0.5 - cy;
+                // Jarak bertanda (negatif di dalam) — AA = clamp(0.5 − d).
+                let sd = if ellipse {
+                    let nx = px / hw.max(0.5);
+                    let ny = py / hh.max(0.5);
+                    ((nx * nx + ny * ny).sqrt() - 1.0) * skala
+                } else {
+                    let dx = px.abs() - hw;
+                    let dy = py.abs() - hh;
+                    let luar = (dx.max(0.0).powi(2) + dy.max(0.0).powi(2)).sqrt();
+                    luar + dx.max(dy).min(0.0)
+                };
+                let coverage = (0.5 - sd).clamp(0.0, 1.0);
+                let alpha = coverage * opacity;
+                if alpha <= ALPHA_EPSILON {
+                    continue;
+                }
+                let i = ((y * self.width + x) * 4) as usize;
+                if erase {
+                    let da = f32::from(self.pixels[i + 3]) / 255.0;
+                    self.pixels[i + 3] = (da * (1.0 - alpha) * 255.0).round() as u8;
+                } else {
+                    // Src-over lurus — identik dengan [`Self::stamp`].
+                    let sa = alpha * (f32::from(color.a) / 255.0);
+                    let da = f32::from(self.pixels[i + 3]) / 255.0;
+                    let out_a = sa + da * (1.0 - sa);
+                    if out_a <= ALPHA_EPSILON {
+                        self.pixels[i] = color.r;
+                        self.pixels[i + 1] = color.g;
+                        self.pixels[i + 2] = color.b;
+                        self.pixels[i + 3] = 0;
+                        continue;
+                    }
+                    let blend = |s: u8, d: u8| -> u8 {
+                        let v = (f32::from(s) * sa + f32::from(d) * da * (1.0 - sa)) / out_a;
+                        v.round().clamp(0.0, 255.0) as u8
+                    };
+                    self.pixels[i] = blend(color.r, self.pixels[i]);
+                    self.pixels[i + 1] = blend(color.g, self.pixels[i + 1]);
+                    self.pixels[i + 2] = blend(color.b, self.pixels[i + 2]);
+                    self.pixels[i + 3] = (out_a * 255.0).round() as u8;
+                }
+            }
+        }
+        Some(FillResult { rect: area, before })
+    }
 }
 
 /// Hasil flood fill: area terisi + piksel sebelumnya (untuk undo).
@@ -1061,6 +1193,120 @@ mod tests {
             h: 2,
         });
         assert!(r.clear_in(&sel).is_none(), "tak ada area tersentuh");
+    }
+
+    #[test]
+    fn geser_isi_memindahkan_hanya_isi_seleksi_dan_bisa_undo() {
+        let mut r = Raster::new(16, 16);
+        // Blok opak di sekitar (3, 3) — terpotong seleksi 2×2 di (2,2).
+        r.stamp(
+            (3.0, 3.0),
+            Brush {
+                size: 4.0,
+                ..Brush::default()
+            },
+            ink(),
+            false,
+        );
+        let sel = Seleksi::Kotak(Rect {
+            x: 2,
+            y: 2,
+            w: 2,
+            h: 2,
+        });
+        let hasil = r.geser_isi(&sel, 5, 0).expect("pindahan sah");
+        assert_eq!(r.pixel(3, 3).unwrap().a, 0, "posisi lama terangkat");
+        assert!(r.pixel(8, 3).unwrap().a > 0, "isi pindah +5 px");
+        assert_eq!(
+            r.pixel(9, 3).unwrap().a,
+            0,
+            "di luar lebar seleksi tetap kosong"
+        );
+        // Data "sebelum" mencakup area lama ∪ baru — undo memulihkan.
+        hasil.before.restore(&mut r);
+        assert!(r.pixel(3, 3).unwrap().a > 0, "isi pulih setelah undo");
+    }
+
+    #[test]
+    fn bentuk_kotak_terisi_dan_ellipse_tepi_halus() {
+        let mut r = Raster::new(16, 16);
+        r.bentuk(
+            Rect {
+                x: 4,
+                y: 4,
+                w: 8,
+                h: 8,
+            },
+            false,
+            ink(),
+            1.0,
+            false,
+        )
+        .expect("area dalam kanvas");
+        assert!(r.pixel(8, 8).unwrap().a > 200, "inti kotak penuh");
+        assert_eq!(r.pixel(2, 8).unwrap().a, 0, "di luar kotak kosong");
+
+        let mut e = Raster::new(16, 16);
+        e.bentuk(
+            Rect {
+                x: 2,
+                y: 2,
+                w: 12,
+                h: 12,
+            },
+            true,
+            ink(),
+            1.0,
+            false,
+        )
+        .expect("area dalam kanvas");
+        assert!(e.pixel(8, 8).unwrap().a > 200, "inti ellipse penuh");
+        assert_eq!(e.pixel(2, 2).unwrap().a, 0, "sudut ellipse kosong");
+        let tepi = e.pixel(11, 12).unwrap().a;
+        assert!(
+            (1..250).contains(&tepi),
+            "tepi ellipse ter-anti-alias (parsial): {tepi}"
+        );
+    }
+
+    #[test]
+    fn bentuk_erase_mengurangi_alpha_dan_opasitas_nol_tanpa_efek() {
+        let mut r = Raster::new(8, 8);
+        r.stamp((4.0, 4.0), Brush::default(), ink(), false);
+        assert!(r.pixel(4, 4).unwrap().a > 0, "terisi dulu");
+        r.bentuk(
+            Rect {
+                x: 2,
+                y: 2,
+                w: 4,
+                h: 4,
+            },
+            false,
+            ink(),
+            1.0,
+            true,
+        )
+        .expect("area sah");
+        assert_eq!(r.pixel(4, 4).unwrap().a, 0, "erase menghabiskan alpha");
+
+        let mut kosong = Raster::new(8, 8);
+        assert!(
+            kosong
+                .bentuk(
+                    Rect {
+                        x: 1,
+                        y: 1,
+                        w: 4,
+                        h: 4,
+                    },
+                    false,
+                    ink(),
+                    0.0,
+                    false
+                )
+                .is_none(),
+            "opacity 0 = tanpa perubahan"
+        );
     }
 
     // Kecil: akses piksel snapshot untuk asersi di atas.

@@ -27,14 +27,17 @@ const ACTIVE_STRIP_PX: f32 = 2.0;
 /// Jarak isi kotak warna ke tepi slot — swatch 32 px di slot 40 px.
 const KOTAK_PAD_PX: f32 = 4.0;
 
-/// Tool yang tersedia (M2: brush/eraser/fill/eyedropper; M4d: marquee,
-/// lasso & wand — §12.2 toolset lanjutan).
+/// Tool yang tersedia (M2: brush/eraser/fill/eyedropper; M4d: shape,
+/// marquee, lasso, wand, move — §12.2 toolset lanjutan).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
     Brush,
     Eraser,
     Fill,
     Eyedropper,
+    /// Bentuk terisi persegi/elips (M4d tahap 3) — drag; warna aktif,
+    /// opacity brush; toggle Persegi/Ellipse di options bar.
+    Shape,
     /// Seleksi persegi (M4d tahap 1) — drag membentuk marching ants; klik
     /// polos menghapus seleksi.
     Marquee,
@@ -44,18 +47,24 @@ pub enum Tool {
     /// Seleksi region flood-fill (M4d tahap 2) — klik area warna; kontrol
     /// toleransi di options bar (sama dengan Fill).
     Wand,
+    /// Transformasi pindah (M4d tahap 3) — drag isi seleksi ke posisi
+    /// baru (satu entri undo; geometri seleksi ikut bergeser).
+    Move,
 }
 
 impl Tool {
-    /// Urutan item di rail §7.4.
-    pub const ALL: [Tool; 7] = [
+    /// Urutan item di rail §7.4 — bentuk bersama tool gambar, keluarga
+    /// seleksi + move di belakang divider sendiri.
+    pub const ALL: [Tool; 9] = [
         Self::Brush,
         Self::Eraser,
         Self::Fill,
         Self::Eyedropper,
+        Self::Shape,
         Self::Marquee,
         Self::Lasso,
         Self::Wand,
+        Self::Move,
     ];
 
     /// Ikon tool (§5).
@@ -65,9 +74,11 @@ impl Tool {
             Self::Eraser => Icon::Eraser,
             Self::Fill => Icon::Fill,
             Self::Eyedropper => Icon::Eyedropper,
+            Self::Shape => Icon::Shape,
             Self::Marquee => Icon::Marquee,
             Self::Lasso => Icon::Lasso,
             Self::Wand => Icon::Wand,
+            Self::Move => Icon::Move,
         }
     }
 
@@ -78,9 +89,11 @@ impl Tool {
             Self::Eraser => "Eraser",
             Self::Fill => "Fill",
             Self::Eyedropper => "Eyedropper",
+            Self::Shape => "Shape",
             Self::Marquee => "Marquee",
             Self::Lasso => "Lasso",
             Self::Wand => "Wand",
+            Self::Move => "Move",
         }
     }
 
@@ -91,9 +104,11 @@ impl Tool {
             Self::Eraser => Key::E,
             Self::Fill => Key::G,
             Self::Eyedropper => Key::I,
+            Self::Shape => Key::U,
             Self::Marquee => Key::M,
             Self::Lasso => Key::L,
             Self::Wand => Key::W,
+            Self::Move => Key::X,
         }
     }
 
@@ -104,16 +119,18 @@ impl Tool {
             Self::Eraser => "E",
             Self::Fill => "G",
             Self::Eyedropper => "I",
+            Self::Shape => "U",
             Self::Marquee => "M",
             Self::Lasso => "L",
             Self::Wand => "W",
+            Self::Move => "X",
         }
     }
 
-    /// `true` bila tool keluarga seleksi (M4d: marquee/lasso/wand) — rail
-    /// mengelompokkannya di balik divider §7.4.
+    /// `true` bila tool keluarga seleksi/transform (M4d: marquee/lasso/
+    /// wand/move) — rail mengelompokkannya di balik divider §7.4.
     pub const fn is_seleksi(self) -> bool {
-        matches!(self, Self::Marquee | Self::Lasso | Self::Wand)
+        matches!(self, Self::Marquee | Self::Lasso | Self::Wand | Self::Move)
     }
 
     /// Label tooltip: `"Brush (B)"` (§7.9).

@@ -171,6 +171,57 @@ impl Seleksi {
         }
         Some(Self::Mask { rect, bits })
     }
+
+    /// Geser geometri seleksi `(dx, dy)` — tool Move (M4d tahap 3).
+    /// Potongan keluar kanvas dipotong ke batas (koordinat unsigned:
+    /// `Rect::from_points` memangkas ke ≥ 0); `None` bila hasilnya habis
+    /// seluruhnya di luar kanvas.
+    pub fn digeser(self, dx: i32, dy: i32) -> Option<Self> {
+        match self {
+            Self::Kotak(r) => {
+                let baru = Rect::from_points(
+                    r.x as i32 + dx,
+                    r.y as i32 + dy,
+                    (r.x + r.w) as i32 + dx,
+                    (r.y + r.h) as i32 + dy,
+                );
+                (!baru.is_empty()).then_some(Self::Kotak(baru))
+            }
+            Self::Poligon(points) => Some(Self::Poligon(
+                points
+                    .iter()
+                    .map(|p| [p[0] + dx as f32, p[1] + dy as f32])
+                    .collect(),
+            )),
+            Self::Mask { rect, bits } => {
+                let baru = Rect::from_points(
+                    rect.x as i32 + dx,
+                    rect.y as i32 + dy,
+                    (rect.x + rect.w) as i32 + dx,
+                    (rect.y + rect.h) as i32 + dy,
+                );
+                if baru.is_empty() {
+                    return None;
+                }
+                let mut bits_baru = vec![0u8; (baru.w * baru.h) as usize];
+                for y in baru.y..baru.y + baru.h {
+                    for x in baru.x..baru.x + baru.w {
+                        let sumber = ((y as i32 - dy - rect.y as i32) * rect.w as i32
+                            + (x as i32 - dx - rect.x as i32))
+                            as usize;
+                        if bits.get(sumber).is_some_and(|&b| b == 1) {
+                            let tujuan = ((y - baru.y) * baru.w + (x - baru.x)) as usize;
+                            bits_baru[tujuan] = 1;
+                        }
+                    }
+                }
+                Some(Self::Mask {
+                    rect: baru,
+                    bits: bits_baru,
+                })
+            }
+        }
+    }
 }
 
 /// Bbox poligon (floor min → ceil max); kosong bila tak ada titik.
@@ -334,5 +385,63 @@ mod tests {
         assert!(longgar.contains(7, 0), "toleransi longgar menyatukan");
         assert!(Seleksi::dari_wand(&r, -1, 0, 0).is_none(), "benih di luar");
         assert!(Seleksi::dari_wand(&r, 8, 0, 0).is_none(), "benih di luar");
+    }
+
+    #[test]
+    fn digeser_kotak_dan_poligon() {
+        let kotak = Seleksi::Kotak(Rect {
+            x: 2,
+            y: 2,
+            w: 4,
+            h: 4,
+        });
+        assert_eq!(
+            kotak.clone().digeser(3, -2).map(|s| s.rect()),
+            Some(Rect {
+                x: 5,
+                y: 0,
+                w: 4,
+                h: 4
+            }),
+            "kotak: y negatif memangkas ke 0"
+        );
+        let poli = Seleksi::Poligon(vec![[1.0, 1.0], [3.0, 1.0], [2.0, 3.0]]);
+        assert_eq!(
+            poli.digeser(2, 2).map(|s| s.rect()),
+            Some(Rect {
+                x: 3,
+                y: 3,
+                w: 2,
+                h: 2
+            }),
+            "poligon: semua titik ikut bergeser"
+        );
+    }
+
+    #[test]
+    fn digeser_mask_memindah_bits() {
+        // Mask 3×1 di x=2 — hanya kolom tengah terpilih.
+        let sel = Seleksi::Mask {
+            rect: Rect {
+                x: 2,
+                y: 0,
+                w: 3,
+                h: 1,
+            },
+            bits: vec![0, 1, 0],
+        };
+        let hasil = sel.digeser(2, 0).expect("masih di kanvas");
+        assert_eq!(
+            hasil.rect(),
+            Rect {
+                x: 4,
+                y: 0,
+                w: 3,
+                h: 1
+            }
+        );
+        assert!(!hasil.contains(4, 0), "kolom lama ikut bergeser");
+        assert!(hasil.contains(5, 0), "kolom terpilih pindah +2 (x=3 → x=5)");
+        assert!(!hasil.contains(6, 0), "tetangga tak terpilih tetap kosong");
     }
 }

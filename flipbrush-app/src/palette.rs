@@ -454,7 +454,7 @@ mod tests {
         // Tool kini lebih banyak daripada batas riwayat — terpotong ke
         // RECENT_MAX, terakhir dicatat = terdepan.
         assert_eq!(p.recent.len(), RECENT_MAX);
-        assert_eq!(p.recent[0], Tool::Wand, "terakhir dicatat = terdepan");
+        assert_eq!(p.recent[0], Tool::Move, "terakhir dicatat = terdepan");
     }
 
     #[test]

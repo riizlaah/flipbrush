@@ -12,7 +12,12 @@
 //! - **Seleksi** (M4d): marquee (drag kotak), lasso (drag poligon) & wand
 //!   (klik area warna → mask flood-fill) → marching ants + highlight
 //!   ringan (§2.1); seluruh operasi gambar ter-clip area seleksi; klik
-//!   polos marquee/lasso = hapus seleksi; `Delete` hapus isi (undo-able).
+//!   polos marquee/lasso = hapus seleksi; `Delete` hapus isi (undo-able);
+//!   **Move** (M4d tahap 3): drag pindah isi seleksi — pratinjau outline
+//!   live, commit piksel + geometri sekali jadi dengan satu entri undo.
+//! - **Shape** (M4d tahap 3): drag bentuk terisi persegi/elips (toggle di
+//!   options bar) — warna aktif, opacity brush, tepi anti-alias SDF per
+//!   piksel; outline putus-putus selama drag.
 //! - **Onion skin** (§2.3, M3): frame sebelumnya merah / berikutnya biru —
 //!   aman buta warna (§9) — di atas overlay light table (putih @ 8%).
 //!
@@ -183,6 +188,12 @@ pub struct Canvas {
     /// Preview seleksi selama drag marquee/lasso (dipindah ke `selection`
     /// saat rilis; klik polos menghasilkan `None` = hapus seleksi).
     sel_preview: Option<Seleksi>,
+    /// Geometri seleksi saat tekan tool Move (M4d tahap 3) — dasar
+    /// hitung geser pratinjau & commit piksel saat rilis.
+    move_awal: Option<Seleksi>,
+    /// Titik awal drag shape (koordinat dokumen — M4d tahap 3); `None`
+    /// di luar drag.
+    shape_start: Option<Vec2>,
 
     stroke: Option<StrokeInProgress>,
     sampler: StrokeSampler,
@@ -212,6 +223,8 @@ impl Canvas {
             sel_drag: None,
             sel_lasso: Vec::new(),
             sel_preview: None,
+            move_awal: None,
+            shape_start: None,
             stroke: None,
             sampler: StrokeSampler::default(),
             last_doc: None,
@@ -294,6 +307,8 @@ impl Canvas {
         self.sel_drag = None;
         self.sel_lasso.clear();
         self.sel_preview = None;
+        self.move_awal = None;
+        self.shape_start = None;
         self.dirty = Some(PixelRect {
             x: 0,
             y: 0,
@@ -389,6 +404,7 @@ impl Canvas {
 
     /// Gambar kanvas + proses seluruh input pointer viewport/draw ke `ui`.
     /// `color` = warna kuas aktif; berubah saat eyedropper mengambil piksel.
+    #[allow(clippy::too_many_arguments)]
     pub fn show(
         &mut self,
         ui: &mut Ui,
@@ -396,6 +412,7 @@ impl Canvas {
         tool: Tool,
         brush: Brush,
         tolerance: u8,
+        ellipse: bool,
         color: &mut Rgba,
     ) {
         let area = ui.available_rect_before_wrap();
@@ -458,6 +475,10 @@ impl Canvas {
                 self.sel_drag = None;
                 self.sel_lasso.clear();
                 self.sel_preview = None;
+                self.move_awal = None;
+            }
+            if tool != Tool::Shape {
+                self.shape_start = None;
             }
             if drawable {
                 let erase = tool == Tool::Eraser;
@@ -543,15 +564,20 @@ impl Canvas {
         }
 
         // (5) Tool seleksi drag (M4d): marquee drag kotak / lasso drag
-        // poligon — akumulasi selama drag aktif (termasuk frame rilis, saat
-        // pointer masih terbaca via hover); klik polos menghasilkan `None`
-        // = hapus seleksi. Wand klik saja tanpa drag (blok 6b). Preview
-        // digambar sebagai marching ants live di blok gambar.
-        if matches!(tool, Tool::Marquee | Tool::Lasso) && !space_held {
+        // poligon / move geser seleksi — akumulasi selama drag aktif
+        // (termasuk frame rilis, saat pointer masih terbaca via hover);
+        // klik polos menghasilkan `None` = hapus seleksi (marquee/lasso;
+        // move klik polos = tanpa perubahan). Wand klik saja tanpa drag
+        // (blok 6b). Preview digambar sebagai marching ants live.
+        if matches!(tool, Tool::Marquee | Tool::Lasso | Tool::Move) && !space_held {
             if down_now && let Some(pd) = pointer_doc {
                 self.sel_drag = Some(pd);
                 self.sel_lasso = vec![pd];
                 self.sel_preview = None;
+                if tool == Tool::Move {
+                    // Geometri asal — commit rilis (blok 7) memakainya.
+                    self.move_awal = self.selection.clone();
+                }
             }
             if let Some(start) = self.sel_drag
                 && let Some(pd) = pointer_doc
@@ -574,7 +600,49 @@ impl Canvas {
                             self.sel_lasso.iter().map(|p| [p.x, p.y]).collect(),
                         );
                     }
+                    Tool::Move => {
+                        // Pratinjau geometri bergeser — piksel baru
+                        // berpindah saat rilis (blok 7), satu entri undo.
+                        if let Some(awal) = &self.move_awal {
+                            let dx = (pd.x - start.x).floor() as i32;
+                            let dy = (pd.y - start.y).floor() as i32;
+                            self.sel_preview = awal.clone().digeser(dx, dy);
+                        }
+                    }
                     _ => {} // Wand: resolusi saat klik (blok 6b).
+                }
+            }
+        }
+
+        // (5b) Shape (M4d tahap 3): drag membentuk pratinjau outline
+        // (persegi/elips — digambar di blok gambar); rilis mewarnai bentuk
+        // dengan warna aktif & opacity brush — satu entri undo. Klik-panjang
+        // (eyedropper) dibatalkan; klik polos = tanpa efek (rect 0 px).
+        if tool == Tool::Shape && !space_held && self.press.as_ref().is_some_and(|p| !p.long) {
+            if down_now && let Some(pd) = pointer_doc {
+                self.shape_start = Some(pd);
+            }
+            if up_now
+                && let Some(start) = self.shape_start.take()
+                && let Some(pd) = pointer_doc
+            {
+                let rect = PixelRect::from_points(
+                    start.x.min(pd.x).floor() as i32,
+                    start.y.min(pd.y).floor() as i32,
+                    start.x.max(pd.x).ceil() as i32,
+                    start.y.max(pd.y).ceil() as i32,
+                );
+                if rect.w > 0
+                    && rect.h > 0
+                    && let Some(result) =
+                        self.raster
+                            .bentuk(rect, ellipse, *color, brush.opacity, false)
+                {
+                    let after = self.raster.region(result.rect);
+                    if result.before.data != after {
+                        self.history.push(result.rect, result.before.data, after);
+                    }
+                    new_dirty = new_dirty.union(result.rect);
                 }
             }
         }
@@ -613,13 +681,40 @@ impl Canvas {
             self.selection = Seleksi::dari_wand(&self.raster, gx, gy, tolerance);
         }
 
-        // (7) Rilis: commit stroke & seleksi ke state.
+        // (7) Rilis: commit stroke, seleksi, atau pindahan (Move — M4d
+        // tahap 3: piksel + geometri seleksi bergeser dalam satu entri undo).
         if up_now {
             if let Some(stroke) = self.stroke.take() {
                 commit_stroke(&mut self.history, &self.raster, stroke);
             }
             if self.sel_drag.take().is_some() {
-                self.selection = self.sel_preview.take();
+                if let Some(awal) = self.move_awal.take() {
+                    // Tool Move: geser isi seleksi mengikuti pratinjau.
+                    let offset = self.sel_preview.as_ref().map(|s| {
+                        (
+                            s.rect().x as i32 - awal.rect().x as i32,
+                            s.rect().y as i32 - awal.rect().y as i32,
+                        )
+                    });
+                    if let Some((dx, dy)) = offset
+                        && (dx != 0 || dy != 0)
+                    {
+                        if let Some(result) = self.raster.geser_isi(&awal, dx, dy) {
+                            let after = self.raster.region(result.rect);
+                            if result.before.data != after {
+                                self.history.push(result.rect, result.before.data, after);
+                            }
+                            new_dirty = new_dirty.union(result.rect);
+                        }
+                        self.selection = self.sel_preview.take();
+                    } else {
+                        // Tanpa geseran (klik polos / offset 0) — seleksi
+                        // dikembalikan apa adanya.
+                        self.selection = Some(awal);
+                    }
+                } else {
+                    self.selection = self.sel_preview.take();
+                }
             }
             self.last_doc = None;
             self.press = None;
@@ -688,13 +783,30 @@ impl Canvas {
             );
         }
         // Seleksi (M4d): marching ants di atas isi kanvas — preview live
-        // selama drag marquee/lasso, seleksi tersimpan setelah rilis.
+        // selama drag marquee/lasso/move, seleksi tersimpan setelah rilis.
         self.gambar_seleksi(
             painter,
             theme,
             self.sel_preview.as_ref().or(self.selection.as_ref()),
             doc_rect,
         );
+        // Pratinjau shape (M4d tahap 3): outline putus-putus persegi/elips
+        // selama drag — bentuk baru diwarnai saat rilis.
+        let bentuk_prev = if tool == Tool::Shape {
+            self.shape_start.and_then(|start| {
+                pointer_doc.map(|pd| {
+                    PixelRect::from_points(
+                        start.x.min(pd.x).floor() as i32,
+                        start.y.min(pd.y).floor() as i32,
+                        start.x.max(pd.x).ceil() as i32,
+                        start.y.max(pd.y).ceil() as i32,
+                    )
+                })
+            })
+        } else {
+            None
+        };
+        self.gambar_preview_bentuk(painter, theme, bentuk_prev, ellipse, doc_rect);
         self.hud(ui, theme, area, hover);
     }
 
@@ -860,6 +972,54 @@ impl Canvas {
                 );
             }
         }
+    }
+
+    /// Pratinjau outline shape (M4d tahap 3): putus-putus `border/strong`
+    /// — persegi (4 sisi) atau elips (contoh 48 segmen, jalur tertutup);
+    /// tanpa isi — pewarnaan baru terjadi saat rilis drag (blok 5b).
+    fn gambar_preview_bentuk(
+        &self,
+        painter: &egui::Painter,
+        theme: &Theme,
+        rect: Option<PixelRect>,
+        ellipse: bool,
+        doc_rect: Rect,
+    ) {
+        let Some(r) = rect.filter(|r| r.w > 0 && r.h > 0) else {
+            return;
+        };
+        let min = self
+            .viewport
+            .to_screen(Vec2::new(r.x as f32, r.y as f32))
+            .to_pos2();
+        let rect = Rect::from_min_size(min, Vec2::new(r.w as f32, r.h as f32) * self.viewport.zoom)
+            .intersect(doc_rect);
+        if rect.width() <= 0.0 || rect.height() <= 0.0 {
+            return;
+        }
+        let titik: Vec<Pos2> = if ellipse {
+            let mut pts: Vec<Pos2> = (0..48)
+                .map(|i| {
+                    let t = i as f32 / 48.0 * std::f32::consts::TAU;
+                    pos2(
+                        rect.center().x + rect.width() * 0.5 * t.cos(),
+                        rect.center().y + rect.height() * 0.5 * t.sin(),
+                    )
+                })
+                .collect();
+            let pertama = pts[0];
+            pts.push(pertama);
+            pts
+        } else {
+            vec![
+                rect.left_top(),
+                rect.right_top(),
+                rect.right_bottom(),
+                rect.left_bottom(),
+                rect.left_top(),
+            ]
+        };
+        marching_ants(painter, theme, &titik);
     }
 }
 

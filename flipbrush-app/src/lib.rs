@@ -27,7 +27,9 @@
 //! M4d (§12.2): seleksi piksel — tahap 1 marquee (`canvas`, core
 //! `seleksi`): marching ants + highlight §2.1, operasi gambar ter-clip
 //! seleksi, `Delete` hapus isi seleksi; tahap 2 lasso (poligon even-odd)
-//! + wand (mask flood-fill), overlay varian per bentuk asli.
+//! dan wand (mask flood-fill), overlay varian per bentuk asli; tahap 3
+//! transform Move (`geser_isi`, satu entri undo) + shape persegi/elips
+//! (`bentuk`, tepi SDF anti-alias).
 
 pub mod canvas;
 pub mod color;
@@ -78,6 +80,9 @@ pub struct FlipbrushApp {
     brush: Brush,
     /// Toleransi fill 0–100 (§7.5 kontrol spesifik tool).
     fill_tolerance: f32,
+    /// Varian bentuk tool Shape (M4d tahap 3): `false` = persegi
+    /// (default), `true` = elips. Transien (tak di-persist).
+    shape_ellipse: bool,
     /// Warna kuas aktif; berubah saat eyedropper mengambil piksel.
     color: Rgba,
     /// Mode fokus `Tab` (§1, §8.2): sembunyikan chrome, hanya kanvas.
@@ -134,6 +139,7 @@ impl FlipbrushApp {
             tool: Tool::Brush,
             brush: Brush::default(),
             fill_tolerance: DEFAULT_FILL_TOLERANCE,
+            shape_ellipse: false,
             color: Rgba {
                 r: ink.r(),
                 g: ink.g(),
@@ -356,6 +362,25 @@ impl FlipbrushApp {
                             .color(theme.text_secondary),
                     );
                 }
+                Tool::Shape => {
+                    // M4d tahap 3: pilih varian bentuk (persegi/elips).
+                    let persegi = ui.selectable_label(!self.shape_ellipse, "Persegi");
+                    let elips = ui.selectable_label(self.shape_ellipse, "Ellipse");
+                    if persegi.clicked() {
+                        self.shape_ellipse = false;
+                    }
+                    if elips.clicked() {
+                        self.shape_ellipse = true;
+                    }
+                }
+                Tool::Move => {
+                    // M4d tahap 3: transform pindah butuh seleksi aktif.
+                    ui.label(
+                        Type::Body
+                            .rich("Buat seleksi dulu · drag pindah isi seleksi")
+                            .color(theme.text_secondary),
+                    );
+                }
             }
         });
     }
@@ -380,8 +405,15 @@ impl FlipbrushApp {
         let tool = self.tool;
         let brush = self.brush;
         let tolerance = self.fill_tolerance.round() as u8;
-        self.canvas
-            .show(ui, &self.theme, tool, brush, tolerance, &mut self.color);
+        self.canvas.show(
+            ui,
+            &self.theme,
+            tool,
+            brush,
+            tolerance,
+            self.shape_ellipse,
+            &mut self.color,
+        );
 
         // Menggambar di posisi playhead yang masih kosong → expose cel baru
         // (raster tetap di buffer; model hanya mencatat exposure §7.7).
@@ -667,6 +699,7 @@ mod tests {
             tool: Tool::Brush,
             brush: Brush::default(),
             fill_tolerance: DEFAULT_FILL_TOLERANCE,
+            shape_ellipse: false,
             color: Rgba {
                 r: ink.r(),
                 g: ink.g(),
@@ -1225,6 +1258,114 @@ mod tests {
             app.canvas.raster.pixel(403, 403).unwrap().a,
             0,
             "Delete menghapus isi mask"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // M4d tahap 3 — transform (move) + shape (§12.2 toolset lanjutan)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn move_pindahkan_isi_seleksi_dan_undo() {
+        let mut app = test_app();
+        let ctx = test_ctx();
+        // Pemanasan: viewport ter-fit dulu sebelum `screen_of`.
+        frame(&mut app, &ctx, vec![]);
+
+        // Blok opak di (400, 400) + seleksi kotak yang memuatnya.
+        app.tool = Tool::Brush;
+        let p = screen_of(&app, Vec2::new(400.0, 400.0));
+        click(&mut app, &ctx, p);
+        app.canvas.selection = Some(Seleksi::Kotak(PixelRect {
+            x: 390,
+            y: 390,
+            w: 20,
+            h: 20,
+        }));
+        assert!(
+            app.canvas.raster.pixel(400, 400).unwrap().a > 0,
+            "blok tercat dulu"
+        );
+
+        frame(&mut app, &ctx, vec![key(egui::Key::X, Modifiers::NONE)]);
+        assert_eq!(app.tool, Tool::Move, "X memilih tool move");
+
+        // Drag seleksi ~40 px ke kanan (doc) — delta screen = 40 × zoom.
+        let zoom = app.canvas.viewport.zoom;
+        let a = screen_of(&app, Vec2::new(400.0, 400.0));
+        stroke(&mut app, &ctx, a, a + Vec2::new(40.0 * zoom, 0.0));
+
+        let sel = app
+            .canvas
+            .selection
+            .as_ref()
+            .expect("seleksi ikut bergeser");
+        let dx = sel.rect().x as i32 - 390;
+        assert!((39..=41).contains(&dx), "geser mendekati 40 px: {dx}");
+        assert_eq!(
+            app.canvas.raster.pixel(400, 400).unwrap().a,
+            0,
+            "isi lama terangkat"
+        );
+        assert!(
+            app.canvas.raster.pixel(400 + dx, 400).unwrap().a > 0,
+            "isi mengikuti geser +{dx}"
+        );
+
+        // Undo memulihkan posisi lama & membersihkan posisi baru —
+        // satu entri undo mencakup area lama ∪ baru.
+        frame(&mut app, &ctx, vec![key(egui::Key::Z, Modifiers::CTRL)]);
+        assert!(
+            app.canvas.raster.pixel(400, 400).unwrap().a > 0,
+            "undo memulihkan isi lama"
+        );
+        assert_eq!(
+            app.canvas.raster.pixel(400 + dx, 400).unwrap().a,
+            0,
+            "undo membersihkan posisi baru"
+        );
+    }
+
+    #[test]
+    fn shape_drag_mengisi_warna_aktif_klik_pola_tanpa_efek() {
+        let mut app = test_app();
+        let ctx = test_ctx();
+        // Pemanasan: viewport ter-fit dulu sebelum `screen_of`.
+        frame(&mut app, &ctx, vec![]);
+
+        frame(&mut app, &ctx, vec![key(egui::Key::U, Modifiers::NONE)]);
+        assert_eq!(app.tool, Tool::Shape, "U memilih tool shape");
+        app.color = Rgba::opaque(60, 120, 200);
+
+        let a = screen_of(&app, Vec2::new(300.0, 300.0));
+        let b = screen_of(&app, Vec2::new(360.0, 340.0));
+        stroke(&mut app, &ctx, a, b);
+        assert_eq!(
+            app.canvas.raster.pixel(330, 320).unwrap().b,
+            200,
+            "inti bentuk terisi warna aktif"
+        );
+        assert_eq!(
+            app.canvas.raster.pixel(280, 280).unwrap().a,
+            0,
+            "di luar bentuk kosong"
+        );
+
+        // Klik polos = tanpa efek (rect 0 px) — bukti kuat: satu undo
+        // mengembalikan seluruh bentuk; bila klik membuat entri kedua,
+        // undo justru menyisakan bentuk di kanvas.
+        let luar = screen_of(&app, Vec2::new(500.0, 500.0));
+        click(&mut app, &ctx, luar);
+        assert_eq!(
+            app.canvas.raster.pixel(500, 500).unwrap().a,
+            0,
+            "klik polos tak menggambar"
+        );
+        frame(&mut app, &ctx, vec![key(egui::Key::Z, Modifiers::CTRL)]);
+        assert_eq!(
+            app.canvas.raster.pixel(330, 320).unwrap().a,
+            0,
+            "satu undo menghapus seluruh bentuk (klik polos tanpa entri)"
         );
     }
 

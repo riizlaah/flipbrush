@@ -571,6 +571,20 @@ M5/M6)*
   per varian) — e2e: `L` drag segitiga → highlight poligon, `Delete`
   bersih; `W` klik blok → highlight mengikuti bentuk blok; stroke di luar
   mask ter-clip.
+- *(M4d tahap 3 selesai)* transform (Move) + shape (`Raster::geser_isi` /
+  `Raster::bentuk` / `Seleksi::digeser`): Move (`X`, grup seleksi) — drag
+  pindah isi seleksi, pratinjau geometri mengikuti pointer (outline live),
+  rilis memindahkan piksel sekali jadi dengan satu entri undo (area kotor
+  = posisi lama ∪ posisi baru) + geometri seleksi ikut bergeser (Mask:
+  bits ikut dipindah); klik polos/tanpa geseran = tanpa perubahan;
+  Shape (`U`, bersama tool gambar) — drag bentuk terisi persegi/elips
+  (toggle Persegi/Ellipse di options bar §7.5) dengan warna aktif +
+  opacity brush, tepi anti-alias via SDF per piksel (coverage
+  `clamp(0.5 − d)` — §6 tanpa bergerigi), pratinjau outline putus-putus
+  selama drag, rilis = satu entri undo; klik polos = rect 0 px tanpa
+  efek, klik-panjang tetap eyedropper — e2e: `X` drag seleksi terisi →
+  isi pindah + undo memulihkan; `U` drag → kotak/elips terisi warna
+  aktif, tepi halus.
 - Tool rail 48 px §7.4; options bar 40 px §7.5; dock 280 px + timeline dock 200 px,
   resize & persist per proyek §8.2; command palette `Ctrl+K` §7.10; hover, shortcut
   penuh, dense (§1.5); `Tab` mode fokus; HiDPI logical px.
