@@ -69,16 +69,19 @@ impl Tool {
         }
     }
 
+    /// Huruf shortcut (§7.9: tooltip menyertakan shortcut).
+    pub const fn shortcut(self) -> &'static str {
+        match self {
+            Self::Brush => "B",
+            Self::Eraser => "E",
+            Self::Fill => "G",
+            Self::Eyedropper => "I",
+        }
+    }
+
     /// Label tooltip: `"Brush (B)"` (§7.9).
     pub fn tooltip(self) -> String {
-        let letter = match self.key() {
-            Key::B => "B",
-            Key::E => "E",
-            Key::G => "G",
-            Key::I => "I",
-            _ => "?",
-        };
-        format!("{} ({letter})", self.name())
+        format!("{} ({})", self.name(), self.shortcut())
     }
 }
 

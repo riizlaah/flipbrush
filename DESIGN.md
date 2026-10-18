@@ -523,6 +523,15 @@ M5/M6)*
   §7.4), opsi bar §7.5 dilepas dari swatch+hex, dan roda/strip Color
   ditengahkan (padding simetris — tak mepet tepi panel); e2e: klik kotak rail →
   tab Color + un-collapse, roda sejajar tengah panel.
+- *(M4c tahap 1 selesai)* command palette §7.10: `Ctrl+K` → modal terpusat
+  560 px — input `body-lg`, hasil `label-md` + shortcut di kanan, grup
+  (Terakhir dipakai / Tool / Umum / Panel / Playback), filter label+shortcut,
+  `↑/↓` pilih (wrap) + `Enter` jalankan & tutup + `Esc`/klik-backdrop tutup;
+  modal egui memblokir input di bawahnya dan shortcut lain dibekukan selama
+  terbuka; empty state §7.11 (ikon 32 px + `body-lg`); "file recent" hanya
+  struktur — daftar berkas menyusul bersama M5 — e2e: `Ctrl+K` → ketik
+  "panel layers" → `Enter` membuka tab Layers; query kosong hasil tetap
+  terbuka; `Esc` menutup.
 - Tool rail 48 px §7.4; options bar 40 px §7.5; dock 280 px + timeline dock 200 px,
   resize & persist per proyek §8.2; command palette `Ctrl+K` §7.10; hover, shortcut
   penuh, dense (§1.5); `Tab` mode fokus; HiDPI logical px.

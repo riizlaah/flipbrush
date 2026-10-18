@@ -17,11 +17,15 @@
 //! M4a (§12.2): dock kanan §7.6/§8.2 — tab Color/Brush/Layers, resize
 //! 220–460 px, collapse header, menu ⋮, dan layout persist antar sesi
 //! (`dock`).
+//! M4c tahap 1 (§12.2): command palette `Ctrl+K` §7.10 (`palette`) —
+//! semua command + recent tools sesi, filter, ↑/↓ Enter Esc, empty state
+//! §7.11; modal egui memblokir input di bawahnya.
 
 pub mod canvas;
 pub mod color;
 pub mod dock;
 pub mod icon;
+pub mod palette;
 pub mod project;
 pub mod slider;
 pub mod theme;
@@ -82,6 +86,8 @@ pub struct FlipbrushApp {
     swatches: color::Swatches,
     /// State UI transien Panel Color (tekstur roda, buffer hex).
     color_ui: color::ColorUi,
+    /// Command palette §7.10 (`Ctrl+K`) — transien; riwayat tool sesi.
+    palette: palette::Palette,
     /// Persistensi `.flip`: file utama, autosave, pemulihan (§13.2).
     project: project::State,
 }
@@ -135,6 +141,7 @@ impl FlipbrushApp {
             // §7.3: swatch persist antar sesi (`swatches.json` pendamping).
             swatches: color::Swatches::load(),
             color_ui: color::ColorUi::default(),
+            palette: palette::Palette::default(),
             // §13.2: deteksi autosave pemulihan + thread autosave 30 dtk.
             project: project::State::new(project::data_dir(), project::AUTOSAVE_DELAY),
         }
@@ -174,6 +181,9 @@ impl FlipbrushApp {
                 .frame(egui::Frame::NONE)
                 .show(ui, |ui| self.show_canvas(ui));
             self.recovery_dialog(ui.ctx());
+            // §7.10: palette tetap bisa dibuka di mode fokus (modal, bukan
+            // chrome) — mis. untuk berpindah tool tanpa keluar fokus.
+            self.command_palette(ui.ctx());
             return;
         }
 
@@ -185,7 +195,11 @@ impl FlipbrushApp {
             .frame(egui::Frame::NONE.fill(self.theme.surface_1))
             .show(ui, |ui| {
                 let hasil = tool::show(ui, &self.theme, self.tool, self.color);
-                self.tool = hasil.tool;
+                if self.tool != hasil.tool {
+                    self.tool = hasil.tool;
+                    // §7.10: tool dari rail ikut tercatat sebagai recent.
+                    self.palette.catat_tool(hasil.tool);
+                }
                 if hasil.warna_diklik {
                     // §7.3/§7.6: kotak warna → tampilkan tab Color di
                     // dock kanan (dock collapse ikut dibuka).
@@ -241,6 +255,32 @@ impl FlipbrushApp {
         // §13.2: dialog pemulihan digambar terakhir — lapisan modal di atas
         // seluruh chrome sampai pengguna memilih pulihkan/buang.
         self.recovery_dialog(ui.ctx());
+        // §7.10: command palette modal di atas chrome.
+        self.command_palette(ui.ctx());
+    }
+
+    /// §7.10: command palette — modal terpusat (`Ctrl+K`); aksi baris
+    /// terpilih diterapkan ke state aplikasi.
+    fn command_palette(&mut self, ctx: &egui::Context) {
+        let aksi = palette::show(ctx, &self.theme, &mut self.palette, self.timeline.playing);
+        let Some(aksi) = aksi else {
+            return;
+        };
+        match aksi {
+            palette::Aksi::Tool(tool) => {
+                self.tool = tool;
+                self.palette.catat_tool(tool);
+            }
+            palette::Aksi::Urungkan => {
+                self.canvas.undo();
+            }
+            palette::Aksi::Ulangi => {
+                self.canvas.redo();
+            }
+            palette::Aksi::ModeFokus => self.focus_mode = !self.focus_mode,
+            palette::Aksi::Tab(tab) => self.dock.buka_tab(tab),
+            palette::Aksi::PutarJeda => self.timeline.playing = !self.timeline.playing,
+        }
     }
 
     /// Isi options bar §7.5: kontrol spesifik tool aktif. (Swatch warna
@@ -437,9 +477,26 @@ impl FlipbrushApp {
     }
 
     /// Shortcut desktop §12.2: tool `B/E/G/I`, undo `Ctrl+Z`, redo
-    /// `Ctrl+Shift+Z`, mode fokus `Tab` (§8.2). Dikonsumsi hanya bila tidak
-    /// sedang mengetik (agar edit nilai §7.2 tidak terganggu).
+    /// `Ctrl+Shift+Z`, mode fokus `Tab` (§8.2), command palette `Ctrl+K`
+    /// (§7.10). Dikonsumsi hanya bila tidak sedang mengetik (agar edit
+    /// nilai §7.2 tidak terganggu); saat palette terbuka semua shortcut
+    /// lain dibekukan — hanya `Ctrl+K` yang menutupnya kembali.
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        if self.palette.open {
+            // `text_edit_focused` sengaja tidak dicek: kombinasi harus
+            // tetap terbaca saat input palet sedang berfokus.
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::K)) {
+                self.palette.tutup();
+            }
+            return;
+        }
+        // `Ctrl+K` dibaca sebelum gate teks: fokus teks palet baru hilang
+        // di akhir pass berikutnya setelah palet ditutup — tanpa urutan
+        // ini, membuka kembali akan tertahan satu frame.
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::K)) {
+            self.palette.buka();
+            return;
+        }
         if ctx.text_edit_focused() {
             return;
         }
@@ -456,6 +513,7 @@ impl FlipbrushApp {
         });
         if let Some(tool) = switch {
             self.tool = tool;
+            self.palette.catat_tool(tool);
         }
         if undo {
             self.canvas.undo();
@@ -563,6 +621,7 @@ mod tests {
             dock: Dock::load_from(&temp_dir("layout").join("layout.json")),
             swatches: color::Swatches::load_from(&temp_dir("swatch").join("swatches.json")),
             color_ui: color::ColorUi::default(),
+            palette: palette::Palette::default(),
             project: project::State::new(temp_dir("app"), std::time::Duration::from_secs(3600)),
         }
     }
@@ -757,6 +816,78 @@ mod tests {
         click(&mut app, &ctx, titik);
         assert_eq!(app.dock.tab, dock::PanelTab::Color);
         assert!(!app.dock.collapsed);
+    }
+
+    // -------------------------------------------------------------------------
+    // M4c — command palette §7.10 (`Ctrl+K`)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn command_palette_ctrl_k_lalu_enter() {
+        let mut app = test_app();
+        let ctx = test_ctx();
+
+        // `Ctrl+K` membuka modal (§7.10).
+        frame(&mut app, &ctx, vec![key(egui::Key::K, Modifiers::CTRL)]);
+        assert!(app.palette.open);
+
+        // Ketik query → filter; `Enter` jalankan baris terpilih lalu tutup.
+        frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Text("panel layers".into())],
+        );
+        frame(&mut app, &ctx, vec![key(egui::Key::Enter, Modifiers::NONE)]);
+        assert!(!app.palette.open, "`Enter` menutup palette");
+        assert_eq!(app.dock.tab, dock::PanelTab::Layers, "aksi Panel Layers");
+
+        // Shortcut lain dibekukan selama palette terbuka (input mengetik).
+        frame(&mut app, &ctx, vec![key(egui::Key::K, Modifiers::CTRL)]);
+        frame(&mut app, &ctx, vec![key(egui::Key::E, Modifiers::NONE)]);
+        assert_eq!(app.tool, Tool::Brush, "tak ada pindah tool saat terbuka");
+
+        // `Ctrl+K` menutup kembali.
+        frame(&mut app, &ctx, vec![key(egui::Key::K, Modifiers::CTRL)]);
+        assert!(!app.palette.open);
+    }
+
+    #[test]
+    fn command_palette_esc_dan_empty_state() {
+        let mut app = test_app();
+        let ctx = test_ctx();
+
+        frame(&mut app, &ctx, vec![key(egui::Key::K, Modifiers::CTRL)]);
+        // Query tanpa hasil (empty state §7.11): `Enter` tak menjalankan apa-apa.
+        frame(&mut app, &ctx, vec![egui::Event::Text("qqq".into())]);
+        frame(&mut app, &ctx, vec![key(egui::Key::Enter, Modifiers::NONE)]);
+        assert!(app.palette.open, "query tanpa hasil tetap terbuka");
+        assert_eq!(
+            app.dock.tab,
+            dock::PanelTab::Brush,
+            "tak ada aksi dijalankan"
+        );
+
+        // `Esc` menutup — modal egui `should_close` (topmost + tanpa popup).
+        frame(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Escape, Modifiers::NONE)],
+        );
+        assert!(!app.palette.open);
+    }
+
+    #[test]
+    fn command_palette_tool_dari_palet_dicatat_recent() {
+        let mut app = test_app();
+        let ctx = test_ctx();
+
+        frame(&mut app, &ctx, vec![key(egui::Key::K, Modifiers::CTRL)]);
+        frame(&mut app, &ctx, vec![egui::Event::Text("eyedropper".into())]);
+        frame(&mut app, &ctx, vec![key(egui::Key::Enter, Modifiers::NONE)]);
+        assert_eq!(app.tool, Tool::Eyedropper);
+        // Recent tools §7.10 — riwayat sesi, terbaru di depan.
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(app.palette.recent(), &[Tool::Eyedropper]);
     }
 
     #[test]
