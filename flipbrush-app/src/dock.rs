@@ -20,8 +20,9 @@ use eframe::egui::{
 use serde::{Deserialize, Serialize};
 
 use flipbrush_core::anim::{Animation, LayerId, MAX_LAYERS};
-use flipbrush_core::raster::Brush;
+use flipbrush_core::raster::{Brush, Rgba};
 
+use crate::color::{self, ColorUi, Harmony, Swatches};
 use crate::icon::{self, Icon};
 use crate::slider::DragNumeric;
 use crate::theme::{self, Theme};
@@ -86,6 +87,9 @@ pub struct Dock {
     /// Header saja (§7.6: panel bisa di-collapse).
     #[serde(default)]
     pub collapsed: bool,
+    /// Mode palet harmony §7.3 — preferensi panel, ikut layout persist.
+    #[serde(default = "harmony_default")]
+    pub harmony: Harmony,
     /// Penamaan inline `(id, nama_asli)` — Esc membatalkan (§9). Transien,
     /// tidak ikut dipersist.
     #[serde(skip)]
@@ -105,6 +109,7 @@ impl Default for Dock {
             width: lebar_default(),
             tab: tab_default(),
             collapsed: false,
+            harmony: harmony_default(),
             renaming: None,
             dirty: false,
             path: layout_path(),
@@ -118,6 +123,10 @@ fn lebar_default() -> f32 {
 
 fn tab_default() -> PanelTab {
     PanelTab::Brush
+}
+
+fn harmony_default() -> Harmony {
+    Harmony::default()
 }
 
 impl Dock {
@@ -212,6 +221,12 @@ pub struct PanelState<'a> {
     pub anim: &'a mut Animation,
     pub timeline: &'a mut Timeline,
     pub brush: &'a mut Brush,
+    /// Warna aktif (kuas) — diedit Panel Color §7.3.
+    pub color: &'a mut Rgba,
+    /// Swatch bar §7.3 — persist `swatches.json`.
+    pub swatches: &'a mut Swatches,
+    /// State UI transien Panel Color (tekstur roda, buffer hex).
+    pub color_ui: &'a mut ColorUi,
 }
 
 /// Kabar balik dari dock ke aplikasi (§13.2 autosave, §8.2 mode fokus).
@@ -249,7 +264,18 @@ pub fn show(ui: &mut Ui, theme: &Theme, dock: &mut Dock, state: PanelState<'_>) 
                 ui.add_space(theme::spacing::GAP_CONTROL);
                 match dock.tab {
                     PanelTab::Brush => brush_panel(ui, theme, state.brush),
-                    PanelTab::Color => warna_kosong(ui, theme),
+                    PanelTab::Color => {
+                        if color::show(
+                            ui,
+                            theme,
+                            state.color_ui,
+                            &mut dock.harmony,
+                            state.color,
+                            state.swatches,
+                        ) {
+                            dock.dirty = true;
+                        }
+                    }
                     PanelTab::Layers => {
                         layers_panel(ui, theme, dock, state.anim, state.timeline, &mut outcome)
                     }
@@ -499,7 +525,7 @@ fn tombol_glyph(
 }
 
 /// Divider horizontal `border/default` selebar konten.
-fn garis_pemisah(ui: &mut Ui, theme: &Theme) {
+pub(crate) fn garis_pemisah(ui: &mut Ui, theme: &Theme) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 1.0), Sense::hover());
     ui.painter().rect_filled(rect, 0.0, theme.border_default);
 }
@@ -536,21 +562,6 @@ fn brush_panel(ui: &mut Ui, theme: &Theme, brush: &mut Brush) {
         brush.hardness = (hardness / 100.0).clamp(0.0, 1.0);
     });
     ui.add_space(theme::spacing::GRID);
-}
-
-/// Empty state §7.11 — panel Color diisi tahap M4b (roda warna §7.3).
-fn warna_kosong(ui: &mut Ui, theme: &Theme) {
-    ui.add_space(theme::spacing::SECTION);
-    ui.vertical_centered(|ui| {
-        let (rect, _) = ui.allocate_exact_size(Vec2::splat(32.0), Sense::hover());
-        icon::paint(ui.painter(), rect, Icon::Eyedropper, theme.text_disabled);
-        ui.add_space(theme::spacing::GAP_CONTROL);
-        ui.label(
-            Type::BodyLg
-                .rich("Panel warna menyusul tahap berikutnya.")
-                .color(theme.text_secondary),
-        );
-    });
 }
 
 /// Satu baris daftar layer — dipisah agar peminjaman `&mut` tidak menumpuk.

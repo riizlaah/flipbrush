@@ -19,6 +19,7 @@
 //! (`dock`).
 
 pub mod canvas;
+pub mod color;
 pub mod dock;
 pub mod icon;
 pub mod project;
@@ -77,6 +78,10 @@ pub struct FlipbrushApp {
     canvas: Canvas,
     /// Dock kanan (§7.6/§8.2): tab panel + layout persist antar sesi.
     dock: Dock,
+    /// Swatch bar §7.3 — persist `~/.config/flipbrush/swatches.json`.
+    swatches: color::Swatches,
+    /// State UI transien Panel Color (tekstur roda, buffer hex).
+    color_ui: color::ColorUi,
     /// Persistensi `.flip`: file utama, autosave, pemulihan (§13.2).
     project: project::State,
 }
@@ -127,6 +132,9 @@ impl FlipbrushApp {
             canvas: Canvas::new(DEFAULT_CANVAS, DEFAULT_CANVAS),
             // §8.2: layout dock restore antar sesi (`~/.config`).
             dock: Dock::load(),
+            // §7.3: swatch persist antar sesi (`swatches.json` pendamping).
+            swatches: color::Swatches::load(),
+            color_ui: color::ColorUi::default(),
             // §13.2: deteksi autosave pemulihan + thread autosave 30 dtk.
             project: project::State::new(project::data_dir(), project::AUTOSAVE_DELAY),
         }
@@ -199,6 +207,9 @@ impl FlipbrushApp {
                 anim: &mut self.anim,
                 timeline: &mut self.timeline,
                 brush: &mut self.brush,
+                color: &mut self.color,
+                swatches: &mut self.swatches,
+                color_ui: &mut self.color_ui,
             },
         );
         if outcome.content_changed {
@@ -573,6 +584,8 @@ mod tests {
             canvas: Canvas::new(DEFAULT_CANVAS, DEFAULT_CANVAS),
             // Folder temp — tes tak boleh menyentuh `~/.config` (§8.2).
             dock: Dock::load_from(&temp_dir("layout").join("layout.json")),
+            swatches: color::Swatches::load_from(&temp_dir("swatch").join("swatches.json")),
+            color_ui: color::ColorUi::default(),
             project: project::State::new(temp_dir("app"), std::time::Duration::from_secs(3600)),
         }
     }

@@ -506,6 +506,14 @@ M5/M6)*
   collapse + tab → kill → restore. *(Peran sesi — keying per proyek menyusul
   bersama settings §10; aksi layer memicu autosave §13.2 — terverifikasi
   pemulihan `kill -9` membawa layer hasil aksi panel.)*
+- *(M4b selesai)* panel Color §7.3: roda HSV 160 px (sudut = hue, jari-jari =
+  saturasi) + strip lightness terpisah, input hex §1.4 + RGB drag-numeric §7.2,
+  swatch bar 16 slot (2×8 — klik pilih / slot kosong simpan warna aktif /
+  `Shift+Klik` hapus / seret geser urutan), palet harmony (complementary,
+  analogous, triadic) sebagai bagian terpisah dengan klik-terapkan; swatch
+  persist `~/.config/flipbrush/swatches.json` (pendamping layout), harmony mode
+  ikut `layout.json` — verifikasi e2e: roda/hex/harmony sinkron dua arah, simpan
+  + pilih + hapus swatch, kill → restore tab & harmony & swatch.
 - Tool rail 48 px §7.4; options bar 40 px §7.5; dock 280 px + timeline dock 200 px,
   resize & persist per proyek §8.2; command palette `Ctrl+K` §7.10; hover, shortcut
   penuh, dense (§1.5); `Tab` mode fokus; HiDPI logical px.
